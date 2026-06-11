@@ -1,0 +1,20 @@
+import type { Config } from "tailwindcss";
+import typography from "@tailwindcss/typography";
+
+export default {
+  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
+  darkMode: [
+    "variant",
+    [
+      ".dark &",
+      "@media (prefers-color-scheme: dark) { :root:not(.light) & }",
+    ],
+  ],
+  future: {
+    hoverOnlyWhenSupported: true,
+  },
+  theme: {
+    extend: {},
+  },
+  plugins: [typography],
+} satisfies Config;

@@ -1,0 +1,87 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #6b6b6b;
+  --accent: #1a1a1a;
+  --card: #f8f8f6;
+  --border: #ebebeb;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --bg: #0f0f0f;
+    --fg: #f1f1ee;
+    --muted: #9a9a96;
+    --accent: #f1f1ee;
+    --card: #1a1a1a;
+    --border: #2a2a2a;
+  }
+}
+
+:root.dark {
+  --bg: #0f0f0f;
+  --fg: #f1f1ee;
+  --muted: #9a9a96;
+  --accent: #f1f1ee;
+  --card: #1a1a1a;
+  --border: #2a2a2a;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--fg);
+  overscroll-behavior-y: none;
+}
+
+body {
+  font-family:
+    -apple-system, "SF Pro Text", "SF Pro Display", system-ui, "Segoe UI",
+    Roboto, sans-serif;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+.animate-sheet-up {
+  animation: sheet-up 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes sheet-down {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(8%);
+    opacity: 0;
+  }
+}
+.animate-sheet-down {
+  animation: sheet-down 180ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-sheet-up,
+  .animate-sheet-down {
+    animation: none;
+  }
+}
