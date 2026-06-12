@@ -1,6 +1,8 @@
 # md1 API
 
-Personal API tokens let you manage notes from **any** HTTP client — curl, scripts, CI, Shortcuts, Raycast, custom apps, or agent tools (including Cursor via the optional MCP server).
+Personal API tokens let you manage notes from **any** HTTP client — curl, scripts, CI, Shortcuts, Raycast, custom apps, or your own integrations.
+
+The same token also powers the bundled **MCP server** for agents and chat tools (Claude Desktop, Windsurf, and other MCP hosts).
 
 ## Setup
 
@@ -12,14 +14,14 @@ Personal API tokens let you manage notes from **any** HTTP client — curl, scri
 Authorization: Bearer m1_YOUR_TOKEN
 ```
 
-Optional env vars for scripts:
+Optional env vars for scripts and MCP:
 
 | Variable | Purpose |
 |----------|---------|
 | `MD1_API_TOKEN` | Your `m1_…` token |
 | `MD1_API_URL` | Base URL (default `https://md1.space`) |
 
-## Endpoints
+## HTTP endpoints
 
 All routes require Bearer auth. Unauthenticated requests return `404`.
 
@@ -74,11 +76,11 @@ curl -s -X DELETE "$MD1_API_URL/api/docs/NOTE_UUID" \
   -H "Authorization: Bearer $MD1_API_TOKEN"
 ```
 
-## Optional: Cursor MCP
+## MCP server
 
-If you use Cursor, the repo includes `mcp-server/` — a thin wrapper around this API with tools like `md1_create_doc`, `md1_create_from_file`, `md1_get_doc`, and `md1_share_doc`.
+`mcp-server/` is a thin wrapper around the same API — tools like `md1_create_doc`, `md1_create_from_file`, `md1_get_doc`, and `md1_share_doc`.
 
-Typical chat flow:
+Typical agent flow:
 
 1. **Create and share in one step** — `md1_create_doc` with `share: true` → returns `Share link: https://md1.space/d/…`
 2. **Share an existing note** — `md1_share_doc` with `query` = id, slug, or part of the title
@@ -88,7 +90,7 @@ Typical chat flow:
 cd mcp-server && npm install && npm run build
 ```
 
-Add to `~/.cursor/mcp.json` (see `mcp.json.example`). This is **one** integration path; the API itself is not Cursor-specific.
+Add the server to your MCP host config (see `mcp.json.example` in the repo). Same `MD1_API_TOKEN` and optional `MD1_API_URL` as curl.
 
 ## Local dev
 

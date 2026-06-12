@@ -70,7 +70,7 @@ export default function ApiAccessPanel() {
           </h2>
           <p className="mt-1 text-sm text-[var(--muted)]">
             Same token works in curl, your own scripts, CI, Shortcuts, Raycast,
-            or any HTTP client. Pass{" "}
+            agents via MCP, or any HTTP client. Pass{" "}
             <code className="rounded bg-[var(--bg)] px-1 py-0.5 text-xs">
               Authorization: Bearer m1_…
             </code>{" "}
@@ -93,6 +93,9 @@ export default function ApiAccessPanel() {
         <ul className="list-inside list-disc space-y-1">
           <li>
             <code className="text-xs">GET /api/docs</code> — list your notes
+          </li>
+          <li>
+            <code className="text-xs">GET /api/docs/[id]</code> — read one note
           </li>
           <li>
             <code className="text-xs">POST /api/docs</code> — create (
@@ -123,26 +126,34 @@ export default function ApiAccessPanel() {
         </p>
       </div>
 
-      <details className="group rounded-md border border-[var(--border)] bg-[var(--bg)]">
-        <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
-          Optional: Cursor MCP
-        </summary>
-        <div className="space-y-3 border-t border-[var(--border)] px-4 py-4">
-          <p className="text-sm text-[var(--muted)]">
-            For Cursor chat (&quot;send to md1&quot;), add the bundled MCP server
-            to{" "}
-            <code className="rounded bg-[var(--card)] px-1 py-0.5 text-xs">
-              ~/.cursor/mcp.json
-            </code>
-            . Build:{" "}
-            <code className="rounded bg-[var(--card)] px-1 py-0.5 text-xs">
-              cd mcp-server && npm install && npm run build
-            </code>
-            .
-          </p>
-          <CopyBlock text={mcpConfig} label="Copy MCP config" />
-        </div>
-      </details>
+      <div className="space-y-2">
+        <h3 className="text-sm font-medium">MCP server</h3>
+        <p className="text-sm text-[var(--muted)]">
+          Same token. The bundled MCP server wraps this API for agents and chat
+          tools — add it to any MCP-compatible host. Build:{" "}
+          <code className="rounded bg-[var(--bg)] px-1 py-0.5 text-xs">
+            cd mcp-server && npm install && npm run build
+          </code>
+          . Config shape in{" "}
+          <code className="rounded bg-[var(--bg)] px-1 py-0.5 text-xs">
+            mcp.json.example
+          </code>{" "}
+          in the repo; see{" "}
+          <code className="rounded bg-[var(--bg)] px-1 py-0.5 text-xs">
+            docs/API.md
+          </code>{" "}
+          for tools like{" "}
+          <code className="rounded bg-[var(--bg)] px-1 py-0.5 text-xs">
+            md1_create_doc
+          </code>{" "}
+          and{" "}
+          <code className="rounded bg-[var(--bg)] px-1 py-0.5 text-xs">
+            md1_share_doc
+          </code>
+          .
+        </p>
+        <CopyBlock text={mcpConfig} label="Copy MCP config" />
+      </div>
     </section>
   );
 }

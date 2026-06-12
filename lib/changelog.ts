@@ -18,7 +18,7 @@ export const CHANGELOG: ChangelogEntry[] = [
     emoji: "🔗",
     title: "Share links from chat via MCP",
     body: [
-      "Cursor MCP can now publish a note and return a public /d/slug link in one step — use share: true on md1_create_doc or md1_create_from_file when you want a link to send people.",
+      "The MCP server can publish a note and return a public /d/slug link in one step — use share: true on md1_create_doc or md1_create_from_file when you want a link to send people.",
       "md1_share_doc publishes an existing note by id, slug, or part of the title; md1_get_doc reads it back before you share.",
       "The API also supports GET /api/docs/:id so any HTTP client can fetch a full note, not just list or mutate it.",
     ],
@@ -31,7 +31,7 @@ export const CHANGELOG: ChangelogEntry[] = [
     body: [
       "Personal API tokens in Settings work with curl, your own scripts, CI, Shortcuts, Raycast — any HTTP client, not just one editor.",
       "Bearer auth on /api/docs: list, create, update, and delete notes without opening the browser.",
-      "Settings now shows copy-paste curl examples and every endpoint; Cursor MCP is an optional expandable section if you want it.",
+      "Settings shows copy-paste curl examples, every HTTP endpoint, and MCP server setup — same token for both.",
     ],
   },
   {

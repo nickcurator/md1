@@ -1,4 +1,4 @@
--- Personal API tokens for programmatic access (Cursor MCP, scripts).
+-- Personal API tokens for programmatic access (HTTP API, MCP server, scripts).
 -- Only token_hash is stored; the plain token is shown once at creation.
 
 CREATE TABLE drive_api_tokens (
