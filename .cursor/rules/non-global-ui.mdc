@@ -1,0 +1,35 @@
+---
+description: Don't add admin/operator UI to global user surfaces — gate by role
+alwaysApply: true
+---
+
+# Non-global UI (admin, ops, internal tools)
+
+The main md1 app is for **all signed-in users**. Do not add UI, nav, copy, or changelog entries for features that only some people use (admins, operators, internal analytics).
+
+## Admin & internal tools
+
+- **Routes**: keep under `/admin/*`. Protect with `isAdminEmail` in middleware and `requireAdmin()` in server code.
+- **Main app UI**: no admin links, badges, or sections visible to everyone. If an admin needs a shortcut, gate it server-side (`isAdminEmail` → pass `isAdmin` boolean) and show only inside an existing personal surface (e.g. profile menu), not in sidebar headers, editor chrome, or global nav.
+- **Client bundle**: never import admin email lists into client components — pass a boolean from the server.
+- **What's new / marketing copy**: only user-facing product changes. Skip internal admin dashboards, analytics, and ops tooling.
+
+## Good pattern (admin menu in profile)
+
+```tsx
+// app/page.tsx — server
+isAdmin={isAdminEmail(user.email)}
+
+// DriveProfileButton.tsx — client
+{isAdmin && ( /* Admin section with /admin/* links */ )}
+```
+
+## Bad pattern
+
+- Admin link in sidebar header next to "Notes" for all users
+- Hardcoded admin emails in `"use client"` components
+- Changelog entry: "New admin analytics dashboard"
+
+## Adding a new admin email
+
+Edit `lib/admin.ts` (`ADMIN_EMAILS`). One list, used by middleware and server checks.

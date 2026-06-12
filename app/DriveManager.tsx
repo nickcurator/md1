@@ -38,9 +38,11 @@ function snapshot(id: string, form: Form): string {
 export default function DriveManager({
   initialDocs,
   user,
+  isAdmin = false,
 }: {
   initialDocs: SharedDoc[];
   user: DriveUser;
+  isAdmin?: boolean;
 }) {
   const [docs, setDocs] = useState<SharedDoc[]>(initialDocs);
   const [editingId, setEditingId] = useState<string | null>(
@@ -470,6 +472,7 @@ export default function DriveManager({
     <div className="flex h-full min-h-0">
       <DriveSidebar
         user={user}
+        isAdmin={isAdmin}
         docs={docs}
         selectedId={editingId}
         dragActive={dragActive}

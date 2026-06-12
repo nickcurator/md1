@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Key, LogOut, Sparkles, User } from "lucide-react";
+import { BarChart3, Key, LogOut, Search, Sparkles, User } from "lucide-react";
 import type { DriveUser } from "@/lib/drive-users-server";
 import { useWhatsNew } from "@/app/WhatsNewProvider";
 
@@ -30,7 +30,13 @@ function DriveAvatar({ user, size }: { user: DriveUser; size: number }) {
   );
 }
 
-export default function DriveProfileButton({ user }: { user: DriveUser }) {
+export default function DriveProfileButton({
+  user,
+  isAdmin = false,
+}: {
+  user: DriveUser;
+  isAdmin?: boolean;
+}) {
   const { hasUnseen } = useWhatsNew();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -119,6 +125,31 @@ export default function DriveProfileButton({ user }: { user: DriveUser }) {
             <Key size={18} />
             API access
           </Link>
+          {isAdmin && (
+            <>
+              <div className="border-t border-[var(--border)]" />
+              <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)]">
+                Admin
+              </div>
+              <Link
+                href="/admin/analytics"
+                onClick={() => setOpen(false)}
+                className="flex w-full items-center gap-3 px-3 py-2.5 text-sm transition-colors hover:bg-[var(--card)]"
+              >
+                <BarChart3 size={18} />
+                Analytics
+              </Link>
+              <Link
+                href="/admin/analytics/user"
+                onClick={() => setOpen(false)}
+                className="flex w-full items-center gap-3 px-3 py-2.5 text-sm transition-colors hover:bg-[var(--card)]"
+              >
+                <Search size={18} />
+                User lookup
+              </Link>
+            </>
+          )}
+          <div className="border-t border-[var(--border)]" />
           <a
             href="/api/auth/logout"
             onClick={() => setOpen(false)}

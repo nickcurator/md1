@@ -1,4 +1,5 @@
 import { requireDriveUser } from "@/lib/drive-auth-server";
+import { isAdminEmail } from "@/lib/admin";
 import { listDocs } from "@/lib/shared-docs-server";
 import DriveManager from "./DriveManager";
 
@@ -9,7 +10,11 @@ export default async function HomePage() {
   const docs = await listDocs(user.id);
   return (
     <div className="flex h-[100dvh] min-h-0 flex-col overflow-hidden">
-      <DriveManager initialDocs={docs} user={user} />
+      <DriveManager
+        initialDocs={docs}
+        user={user}
+        isAdmin={isAdminEmail(user.email)}
+      />
     </div>
   );
 }

@@ -19,6 +19,7 @@ function formatUpdated(iso: string): string {
 
 export default function DriveSidebar({
   user,
+  isAdmin = false,
   docs,
   selectedId,
   dragActive,
@@ -33,6 +34,7 @@ export default function DriveSidebar({
   onDrop,
 }: {
   user: DriveUser;
+  isAdmin?: boolean;
   docs: SharedDoc[];
   selectedId: string | null;
   dragActive: boolean;
@@ -160,7 +162,7 @@ export default function DriveSidebar({
       </div>
 
       <div className="mt-auto border-t border-[var(--border)] p-3">
-        <DriveProfileButton user={user} />
+        <DriveProfileButton user={user} isAdmin={isAdmin} />
       </div>
     </aside>
   );
