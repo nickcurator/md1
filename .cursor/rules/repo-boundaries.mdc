@@ -1,0 +1,26 @@
+---
+description: md1 is standalone — commit and push only to the md1 repo
+alwaysApply: true
+---
+
+# md1 repository boundaries
+
+md1 is **not** part of readlang / Newt. It is its own product and git repo.
+
+| | |
+|---|---|
+| **Repo** | https://github.com/nickcurator/md1 |
+| **Local path** | `/Users/mykolaantipov/Documents/antipov/md1` |
+| **Production** | https://md1.space |
+| **Newt / readlang** | https://getnewt.app — separate repo, Drive removed |
+
+## Git
+
+- Work on md1 (editor, `/api/docs`, API tokens, MCP, migrations, settings) → **commit and push only here** (`origin` → `nickcurator/md1`).
+- **Never** commit or push md1 code, MCP server, or md1-only Cursor rules to `readlang`.
+- When the user says «пуш» in an md1 context → push **md1 only**, unless they explicitly name readlang.
+
+## Deploy
+
+- Vercel project for md1.space (not the readlang/Newt Vercel project).
+- Supabase: md1’s own project (not Newt’s DB for new features).
