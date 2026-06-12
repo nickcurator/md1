@@ -57,8 +57,30 @@ Body fields (all optional except you need content for a useful note):
 | `title` | string | Default `Untitled` |
 | `content` | string | Markdown, max 200k chars |
 | `description` | string | |
-| `isPublished` | boolean | Default `false` |
-| `isPublic` | boolean | Public `/d/slug` when published |
+| `isPublished` | boolean | Default `false`. When `true`, note is live at `/d/{slug}` |
+| `isPublic` | boolean | Set automatically when publishing; public read without login |
+
+### Share / publish
+
+There is no separate `/share` endpoint. Set `isPublished: true` on **create** or **update**. The response includes `slug` — share link: `$MD1_API_URL/d/{slug}`.
+
+Create and publish in one request:
+
+```bash
+curl -s -X POST "$MD1_API_URL/api/docs" \
+  -H "Authorization: Bearer $MD1_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"My note","content":"# Hello\n","isPublished":true}'
+```
+
+Publish an existing note:
+
+```bash
+curl -s -X PATCH "$MD1_API_URL/api/docs/NOTE_UUID" \
+  -H "Authorization: Bearer $MD1_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"isPublished":true}'
+```
 
 ### Update note
 
@@ -91,6 +113,19 @@ cd mcp-server && npm install && npm run build
 ```
 
 Add the server to your MCP host config (see `mcp.json.example` in the repo). Same `MD1_API_TOKEN` and optional `MD1_API_URL` as curl.
+
+### Tools
+
+| Tool | Purpose |
+|------|---------|
+| `md1_list_docs` | List notes (includes `shareUrl` when published) |
+| `md1_get_doc` | Read one note by id, slug, or title fragment |
+| `md1_create_doc` | Create from markdown; `share: true` publishes immediately |
+| `md1_create_from_file` | Import a local `.md` / `.txt` file |
+| `md1_share_doc` | Publish an existing note and return the share link |
+| `md1_update_doc` | Update content or publish with `share: true` |
+
+`md1_share_doc` and `share: true` use the same `isPublished` flow as the HTTP API above.
 
 ## Local dev
 
