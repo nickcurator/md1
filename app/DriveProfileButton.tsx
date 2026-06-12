@@ -117,7 +117,7 @@ export default function DriveProfileButton({ user }: { user: DriveUser }) {
             className="flex w-full items-center gap-3 px-3 py-2.5 text-sm transition-colors hover:bg-[var(--card)]"
           >
             <Key size={18} />
-            API tokens &amp; Cursor
+            API access
           </Link>
           <a
             href="/api/auth/logout"

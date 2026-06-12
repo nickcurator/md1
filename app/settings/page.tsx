@@ -3,7 +3,7 @@ import { ArrowLeft } from "lucide-react";
 import { requireDriveUser } from "@/lib/drive-auth-server";
 import AppLogo from "@/components/AppLogo";
 import ApiTokensPanel from "./ApiTokensPanel";
-import CursorSetupPanel from "./CursorSetupPanel";
+import ApiAccessPanel from "./ApiAccessPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -29,12 +29,12 @@ export default async function SettingsPage() {
           <AppLogo />
           <h1 className="mt-4 text-2xl font-semibold">Settings</h1>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            Connect md1 to Cursor and other tools.
+            Personal API tokens for scripts, CLI, automations, and agents.
           </p>
         </div>
 
         <ApiTokensPanel />
-        <CursorSetupPanel />
+        <ApiAccessPanel />
       </main>
     </div>
   );

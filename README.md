@@ -18,16 +18,16 @@ npm run dev                  # http://localhost:3001
 |------|---------|
 | `/` | Editor |
 | `/login` | Google sign-in |
-| `/settings` | API tokens + Cursor MCP setup |
+| `/settings` | API tokens + integration examples |
 | `/whats-new` | Product changelog |
 | `/d/[slug]` | Public published doc |
 | `/api/docs` | CRUD API (cookie or `Bearer m1_…`) |
 | `/api/tokens` | Manage API tokens (cookie only) |
 | `/api/auth/*` | OAuth |
 
-## Cursor
+## API access
 
-See [docs/CURSOR.md](docs/CURSOR.md) — API token + `mcp-server/` for *«отправь в md1»*.
+See [docs/API.md](docs/API.md) — Bearer tokens for curl, scripts, and automations. Optional `mcp-server/` for Cursor.
 
 ## Deploy (Vercel)
 

@@ -14,6 +14,6 @@ When the user says **"отправь в md1"**, **"send to md1"**, **"save to md
 5. Reply with the editor URL and public `/d/slug` URL if published.
 
 If MCP tools are unavailable, tell the user to:
-- Create an API token at https://md1.space/settings
-- Add the `md1` server to `~/.cursor/mcp.json` (see repo `mcp.json.example`)
+- Create an API token at https://md1.space/settings (works with curl/any HTTP client too)
+- For Cursor: add the `md1` server to `~/.cursor/mcp.json` (see `mcp.json.example` and `docs/API.md`)
 - Restart Cursor

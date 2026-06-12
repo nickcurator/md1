@@ -13,6 +13,17 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-06-12-api-anywhere",
+    date: "2026-06-12",
+    emoji: "🔌",
+    title: "API access for any tool",
+    body: [
+      "Personal API tokens in Settings work with curl, your own scripts, CI, Shortcuts, Raycast — any HTTP client, not just one editor.",
+      "Bearer auth on /api/docs: list, create, update, and delete notes without opening the browser.",
+      "Settings now shows copy-paste curl examples and every endpoint; Cursor MCP is an optional expandable section if you want it.",
+    ],
+  },
+  {
     id: "2026-06-12-whats-new",
     date: "2026-06-12",
     emoji: "✨",
@@ -21,16 +32,6 @@ export const CHANGELOG: ChangelogEntry[] = [
       "When we ship an update, you'll get a short toast after sign-in and a dot on your profile avatar — open What's new from the sidebar menu to read the full changelog.",
       "The /whats-new page groups releases by date, with a table of contents on desktop so you can jump between updates.",
       "Acknowledging the toast or visiting the page clears the indicator on this device until the next release.",
-    ],
-  },
-  {
-    id: "2026-06-12-cursor-api",
-    date: "2026-06-12",
-    emoji: "⌨️",
-    title: "Send notes from Cursor",
-    body: [
-      "Create API tokens in Settings and connect the md1 MCP server — say \"send to md1\" in Cursor to import a markdown file.",
-      "Bearer auth on /api/docs lets scripts create and update notes without a browser session.",
     ],
   },
 ];

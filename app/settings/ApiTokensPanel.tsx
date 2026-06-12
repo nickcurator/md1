@@ -20,7 +20,7 @@ export default function ApiTokensPanel() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [newName, setNewName] = useState("Cursor");
+  const [newName, setNewName] = useState("CLI");
   const [revealedToken, setRevealedToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -99,8 +99,8 @@ export default function ApiTokensPanel() {
         <div>
           <h2 className="text-base font-semibold text-[var(--fg)]">API tokens</h2>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            For Cursor, scripts, and automations. Paste the token into your MCP
-            config — it is shown only once.
+            For curl, scripts, CI, or any tool that speaks HTTP. Copy it into
+            your env or config — shown only once.
           </p>
         </div>
       </div>
@@ -133,7 +133,7 @@ export default function ApiTokensPanel() {
             type="text"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            placeholder="Cursor"
+            placeholder="e.g. CLI, CI, laptop"
             className="rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-[var(--fg)] outline-none focus:ring-2 focus:ring-[var(--fg)]/20"
             disabled={busy}
           />
