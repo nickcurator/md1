@@ -39,5 +39,11 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/", "/settings", "/api/docs/:path*", "/api/tokens/:path*"],
+  matcher: [
+    "/",
+    "/settings",
+    "/whats-new",
+    "/api/docs/:path*",
+    "/api/tokens/:path*",
+  ],
 };

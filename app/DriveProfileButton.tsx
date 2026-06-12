@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Key, LogOut, User } from "lucide-react";
+import { Key, LogOut, Sparkles, User } from "lucide-react";
 import type { DriveUser } from "@/lib/drive-users-server";
+import { useWhatsNew } from "@/app/WhatsNewProvider";
 
 function DriveAvatar({ user, size }: { user: DriveUser; size: number }) {
   const label = user.name.trim() || user.email;
@@ -30,6 +31,7 @@ function DriveAvatar({ user, size }: { user: DriveUser; size: number }) {
 }
 
 export default function DriveProfileButton({ user }: { user: DriveUser }) {
+  const { hasUnseen } = useWhatsNew();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -61,7 +63,15 @@ export default function DriveProfileButton({ user }: { user: DriveUser }) {
         aria-expanded={open}
         aria-label="Open profile menu"
       >
-        <DriveAvatar user={user} size={32} />
+        <span className="relative shrink-0">
+          <DriveAvatar user={user} size={32} />
+          {hasUnseen && !open && (
+            <span
+              className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-[var(--bg)]"
+              aria-hidden
+            />
+          )}
+        </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-medium text-[var(--fg)]">
             {displayName}
@@ -88,6 +98,19 @@ export default function DriveProfileButton({ user }: { user: DriveUser }) {
             </div>
           </div>
           <div className="border-t border-[var(--border)]" />
+          <Link
+            href="/whats-new"
+            onClick={() => setOpen(false)}
+            className="flex w-full items-center gap-3 px-3 py-2.5 text-sm transition-colors hover:bg-[var(--card)]"
+          >
+            <Sparkles size={18} />
+            <span className="flex-1">What&apos;s new</span>
+            {hasUnseen && (
+              <span className="rounded bg-[var(--fg)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--bg)]">
+                New
+              </span>
+            )}
+          </Link>
           <Link
             href="/settings"
             onClick={() => setOpen(false)}

@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { getDriveUser } from "@/lib/drive-auth-server";
+import AppProviders from "./AppProviders";
 import DriveFeedbackWidget from "./DriveFeedbackWidget";
 import "./globals.css";
 
@@ -53,7 +54,9 @@ export default async function RootLayout({
         />
       </head>
       <body className="bg-[var(--bg)] text-[var(--fg)] antialiased">
-        {children}
+        <AppProviders loggedIn={!!user}>
+          {children}
+        </AppProviders>
         {user && (
           <DriveFeedbackWidget email={user.email} userId={user.id} />
         )}

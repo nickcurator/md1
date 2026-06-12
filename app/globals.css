@@ -79,9 +79,29 @@ body {
   animation: sheet-down 180ms cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 
+@keyframes sheet-up-center {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 14px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+.animate-sheet-up-center {
+  transform: translateX(-50%);
+  animation: sheet-up-center 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-sheet-up,
-  .animate-sheet-down {
+  .animate-sheet-down,
+  .animate-sheet-up-center {
     animation: none;
+  }
+  .animate-sheet-up-center {
+    transform: translateX(-50%);
+    opacity: 1;
   }
 }
