@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { createBrowserClient } from "@supabase/ssr";
-import { DRIVE_AUTH_COOKIE } from "@/lib/drive-supabase";
+import { DRIVE_AUTH_COOKIE } from "@/lib/drive-auth-constants";
 import { analytics } from "@/lib/analytics";
 
 const SIGNUP_FRESH_MS = 60 * 60 * 1000;

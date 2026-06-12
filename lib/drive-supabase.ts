@@ -2,10 +2,12 @@ import { createServerClient } from "@supabase/ssr";
 import type { CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import type { NextRequest, NextResponse } from "next/server";
+import { DRIVE_AUTH_COOKIE } from "@/lib/drive-auth-constants";
+
+export { DRIVE_AUTH_COOKIE } from "@/lib/drive-auth-constants";
 
 // Separate Supabase auth cookie namespace so Drive sign-in never shares a
 // session with the main app, even though both use the same Supabase project.
-export const DRIVE_AUTH_COOKIE = "sb-drive-auth";
 
 export type CookieToSet = {
   name: string;
