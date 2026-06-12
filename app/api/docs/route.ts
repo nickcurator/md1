@@ -55,6 +55,7 @@ export async function POST(req: Request) {
     );
   }
 
+  const viaApi = Boolean(req.headers.get("authorization")?.startsWith("Bearer "));
   const doc = await createDoc(user.id, {
     title,
     description: (body.description ?? "").trim(),
@@ -63,5 +64,12 @@ export async function POST(req: Request) {
     isPublic: body.isPublic,
     comments: parseDocComments(body.comments ?? []),
   });
+  if (viaApi) {
+    const { captureServerEvent } = await import("@/lib/analytics-server");
+    await captureServerEvent("doc_created", user.id, user.email, {
+      docId: doc.id,
+      via: "api",
+    });
+  }
   return NextResponse.json({ doc });
 }

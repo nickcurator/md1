@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createDriveMiddlewareClient } from "@/lib/drive-supabase";
 import { API_TOKEN_PREFIX } from "@/lib/api-tokens";
+import { isAdminEmail } from "@/lib/admin";
 
 function hasApiToken(request: NextRequest): boolean {
   const auth = request.headers.get("authorization");
@@ -15,6 +16,21 @@ export async function middleware(request: NextRequest) {
 
   if (pathname.startsWith("/api/docs") && hasApiToken(request)) {
     return NextResponse.next();
+  }
+
+  if (pathname.startsWith("/admin")) {
+    let response = NextResponse.next({ request });
+    const supabase = createDriveMiddlewareClient(request, response);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!isAdminEmail(user?.email)) {
+      return new NextResponse("Not found", {
+        status: 404,
+        headers: { "content-type": "text/plain" },
+      });
+    }
+    return response;
   }
 
   let response = NextResponse.next({ request });
@@ -43,6 +59,7 @@ export const config = {
     "/",
     "/settings",
     "/whats-new",
+    "/admin/:path*",
     "/api/docs/:path*",
     "/api/tokens/:path*",
   ],

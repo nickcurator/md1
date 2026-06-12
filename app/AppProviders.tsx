@@ -1,5 +1,7 @@
 "use client";
 
+import { Suspense } from "react";
+import AnalyticsTracker from "@/app/AnalyticsTracker";
 import WhatsNewProvider from "@/app/WhatsNewProvider";
 
 export default function AppProviders({
@@ -9,5 +11,12 @@ export default function AppProviders({
   children: React.ReactNode;
   loggedIn: boolean;
 }) {
-  return <WhatsNewProvider loggedIn={loggedIn}>{children}</WhatsNewProvider>;
+  return (
+    <WhatsNewProvider loggedIn={loggedIn}>
+      <Suspense fallback={null}>
+        <AnalyticsTracker />
+      </Suspense>
+      {children}
+    </WhatsNewProvider>
+  );
 }

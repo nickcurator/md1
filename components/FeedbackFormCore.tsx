@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { ImagePlus, MessageCircle, X } from "lucide-react";
 import type { FeedbackLabels } from "@/lib/feedback-labels";
+import { analytics } from "@/lib/analytics";
 import { fileToCompressedDataUrl } from "@/lib/image";
 
 export type FeedbackSource = "product" | "drive" | "md1";
@@ -132,6 +133,7 @@ export default function FeedbackFormCore({
           data.error ?? labels.requestFailed(res.status),
         );
       }
+      analytics.feedbackSent({ hasImage: !!image });
       onSent?.({ hasImage: !!image });
       setStatus("sent");
       if (embedded) {

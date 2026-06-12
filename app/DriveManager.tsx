@@ -7,6 +7,7 @@ import ThemeToggle from "@/components/ThemeToggle";
 import DriveDeleteDialog from "./DriveDeleteDialog";
 import DriveEditor from "./DriveEditor";
 import DriveSidebar from "./DriveSidebar";
+import { analytics } from "@/lib/analytics";
 import { readMarkdownFiles, titleFromFile } from "./drive-files";
 import type { DriveEditorLiveReaders } from "./drive-editor-live";
 
@@ -252,6 +253,7 @@ export default function DriveManager({
       lastSavedRef.current = snapshot(saved.id, next);
       setShowPreview(false);
       setSaveStatus("idle");
+      analytics.docCreated({ docId: saved.id, via: "ui" });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Create failed");
     } finally {
@@ -281,6 +283,7 @@ export default function DriveManager({
             isPublic: false,
           });
           imported.push(saved);
+          analytics.docCreated({ docId: saved.id, via: "ui" });
         }
 
         setDocs((prev) => {
@@ -352,7 +355,9 @@ export default function DriveManager({
   }, [syncLiveFormToState]);
 
   async function publish() {
-    await persistPatch({ isPublished: true, isPublic: true });
+    const id = editingIdRef.current;
+    const ok = await persistPatch({ isPublished: true, isPublic: true });
+    if (ok && id) analytics.docPublished({ docId: id, isPublic: true });
   }
 
   async function unpublish() {
@@ -374,6 +379,7 @@ export default function DriveManager({
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Delete failed (${res.status})`);
+      analytics.docDeleted({ docId: doc.id });
       const remaining = docs.filter((d) => d.id !== doc.id);
       setDocs(remaining);
       setDeleteTarget(null);

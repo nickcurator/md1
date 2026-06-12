@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Copy, Key, Plus, Trash2 } from "lucide-react";
+import { analytics } from "@/lib/analytics";
 import type { ApiTokenMeta } from "@/lib/api-tokens";
 
 function formatDate(iso: string): string {
@@ -63,6 +64,7 @@ export default function ApiTokensPanel() {
       }
       setTokens((prev) => [data.token!, ...prev]);
       setRevealedToken(data.plain);
+      analytics.apiTokenCreated();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create token");
     } finally {
