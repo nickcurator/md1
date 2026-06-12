@@ -14,7 +14,7 @@ export default function AppProviders({
   return (
     <WhatsNewProvider loggedIn={loggedIn}>
       <Suspense fallback={null}>
-        <AnalyticsTracker />
+        <AnalyticsTracker loggedIn={loggedIn} />
       </Suspense>
       {children}
     </WhatsNewProvider>

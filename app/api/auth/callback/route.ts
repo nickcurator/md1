@@ -4,6 +4,7 @@ import {
   createDriveRouteClient,
 } from "@/lib/drive-supabase";
 import { syncDriveUserFromAuth } from "@/lib/drive-auth-server";
+import { getDriveUserByEmail } from "@/lib/drive-users-server";
 import { DEFAULT_APP_PATH, safeAppPath } from "@/lib/app-path";
 
 export const dynamic = "force-dynamic";
@@ -43,7 +44,14 @@ export async function GET(request: NextRequest) {
       return loginError("Sign-in failed. Try again.", origin);
     }
 
-    await syncDriveUserFromAuth(user);
+    const isNewUser = !(await getDriveUserByEmail(user.email));
+    const driveUser = await syncDriveUserFromAuth(user);
+    if (isNewUser) {
+      const { captureServerEvent } = await import("@/lib/analytics-server");
+      await captureServerEvent("signup", driveUser.id, driveUser.email, {
+        method: "google",
+      });
+    }
     return response;
   } catch (err) {
     const message =
