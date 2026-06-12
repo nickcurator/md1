@@ -1,6 +1,7 @@
 "use client";
 
 import { Plus, Trash2, Upload } from "lucide-react";
+import AppLogo from "@/components/AppLogo";
 import type { DriveUser } from "@/lib/drive-users-server";
 import type { SharedDoc } from "@/lib/shared-docs";
 import DriveProfileButton from "./DriveProfileButton";
@@ -61,7 +62,7 @@ export default function DriveSidebar({
       )}
 
       <div className="border-b border-[var(--border)] px-3 py-4">
-        <span className="px-2 text-sm font-semibold tracking-tight">md1</span>
+        <AppLogo className="px-2" />
       </div>
 
       <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-3 py-2.5">

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getDriveUser } from "@/lib/drive-auth-server";
+import { getDriveUserFromRequest } from "@/lib/drive-auth-server";
 import { createDoc, listDocs } from "@/lib/shared-docs-server";
 import {
   MAX_DOC_CONTENT_CHARS,
@@ -16,8 +16,8 @@ function notFound() {
   });
 }
 
-export async function GET() {
-  const user = await getDriveUser();
+export async function GET(req: Request) {
+  const user = await getDriveUserFromRequest(req);
   if (!user) return notFound();
   const docs = await listDocs(user.id);
   return NextResponse.json({ docs });
@@ -33,7 +33,7 @@ type CreateBody = {
 };
 
 export async function POST(req: Request) {
-  const user = await getDriveUser();
+  const user = await getDriveUserFromRequest(req);
   if (!user) return notFound();
 
   let body: CreateBody;

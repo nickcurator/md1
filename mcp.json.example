@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "md1": {
+      "command": "node",
+      "args": ["/ABSOLUTE/PATH/TO/md1/mcp-server/dist/index.js"],
+      "env": {
+        "MD1_API_TOKEN": "m1_PASTE_TOKEN_FROM_md1.space_settings",
+        "MD1_API_URL": "https://md1.space"
+      }
+    }
+  }
+}

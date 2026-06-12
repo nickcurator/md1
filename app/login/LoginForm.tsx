@@ -1,5 +1,7 @@
 "use client";
 
+import AppLogo from "@/components/AppLogo";
+
 export default function LoginForm({
   nextPath,
   error,
@@ -14,9 +16,11 @@ export default function LoginForm({
   return (
     <div className="mx-auto flex min-h-[70dvh] max-w-sm flex-col justify-center">
       <div className="mb-8 text-center">
-        <p className="text-sm font-semibold tracking-wide text-[var(--muted)]">
-          md1
-        </p>
+        <AppLogo
+          iconSize={22}
+          className="mx-auto justify-center text-[var(--muted)]"
+          labelClassName="text-sm font-semibold tracking-wide text-[var(--muted)]"
+        />
         <h1 className="mt-2 text-2xl font-semibold">Sign in</h1>
         <p className="mt-2 text-sm text-[var(--muted)]">
           Continue with Google to open your space. New accounts are created

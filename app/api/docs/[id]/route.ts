@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getDriveUser } from "@/lib/drive-auth-server";
+import { getDriveUserFromRequest } from "@/lib/drive-auth-server";
 import { deleteDoc, updateDoc } from "@/lib/shared-docs-server";
 import {
   MAX_DOC_CONTENT_CHARS,
@@ -29,7 +29,7 @@ export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const user = await getDriveUser();
+  const user = await getDriveUserFromRequest(req);
   if (!user) return notFound();
   const { id } = await params;
 
@@ -75,10 +75,10 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const user = await getDriveUser();
+  const user = await getDriveUserFromRequest(req);
   if (!user) return notFound();
   const { id } = await params;
   await deleteDoc(user.id, id);

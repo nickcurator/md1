@@ -47,6 +47,18 @@ export async function getDriveUser(): Promise<DriveUser | null> {
   return driveUserFromAuthUser(authUser);
 }
 
+/** Cookie session or `Authorization: Bearer m1_…` API token. */
+export async function getDriveUserFromRequest(
+  req: Request,
+): Promise<DriveUser | null> {
+  const auth = req.headers.get("authorization");
+  if (auth?.startsWith("Bearer ")) {
+    const { getDriveUserFromApiToken } = await import("@/lib/api-tokens-server");
+    return getDriveUserFromApiToken(auth.slice(7).trim());
+  }
+  return getDriveUser();
+}
+
 export async function requireDriveUser(): Promise<DriveUser> {
   const user = await getDriveUser();
   if (!user) notFound();

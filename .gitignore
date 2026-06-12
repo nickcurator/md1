@@ -16,3 +16,5 @@ npm-debug.log*
 next-env.d.ts
 *.tsbuildinfo
 .vercel
+mcp-server/node_modules
+mcp-server/dist

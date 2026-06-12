@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { Download, Library } from "lucide-react";
+import { Download } from "lucide-react";
+import AppLogo from "@/components/AppLogo";
 import Markdown from "@/components/Markdown";
 import ThemeToggle from "@/components/ThemeToggle";
 
@@ -43,8 +44,7 @@ export default function DocView({
           href="/"
           className="fixed top-3 left-3 z-10 flex h-9 items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--bg)]/80 px-3 text-sm font-medium text-[var(--muted)] backdrop-blur hover:text-[var(--fg)]"
         >
-          <Library size={16} />
-          md1
+          <AppLogo iconSize={16} labelClassName="text-sm font-medium" />
         </Link>
       )}
 

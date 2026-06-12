@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { LogOut, User } from "lucide-react";
+import Link from "next/link";
+import { Key, LogOut, User } from "lucide-react";
 import type { DriveUser } from "@/lib/drive-users-server";
 
 function DriveAvatar({ user, size }: { user: DriveUser; size: number }) {
@@ -87,6 +88,14 @@ export default function DriveProfileButton({ user }: { user: DriveUser }) {
             </div>
           </div>
           <div className="border-t border-[var(--border)]" />
+          <Link
+            href="/settings"
+            onClick={() => setOpen(false)}
+            className="flex w-full items-center gap-3 px-3 py-2.5 text-sm transition-colors hover:bg-[var(--card)]"
+          >
+            <Key size={18} />
+            API tokens &amp; Cursor
+          </Link>
           <a
             href="/api/auth/logout"
             onClick={() => setOpen(false)}

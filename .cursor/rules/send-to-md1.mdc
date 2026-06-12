@@ -1,0 +1,19 @@
+---
+description: Send files and markdown content to md1 via MCP when the user asks
+alwaysApply: true
+---
+
+# Send to md1
+
+When the user says **"отправь в md1"**, **"send to md1"**, **"save to md1"**, or similar:
+
+1. Use the **md1** MCP server tools (requires `MD1_API_TOKEN` in MCP config).
+2. For a **file path** → call `md1_create_from_file` with that path.
+3. For **inline content** or a selection → call `md1_create_doc` with the markdown body.
+4. Infer title from the first `# heading` or the filename unless the user gave a title.
+5. Reply with the editor URL and public `/d/slug` URL if published.
+
+If MCP tools are unavailable, tell the user to:
+- Create an API token at https://md1.space/settings
+- Add the `md1` server to `~/.cursor/mcp.json` (see repo `mcp.json.example`)
+- Restart Cursor
