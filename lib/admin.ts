@@ -1,15 +1,10 @@
-// Admin allow-list for /admin/analytics. See ADMIN_EMAILS env var.
+const ADMIN_EMAILS = ["antipov.work@gmail.com"];
 
 export function adminEmails(): string[] {
-  return (process.env.ADMIN_EMAILS ?? "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
+  return ADMIN_EMAILS;
 }
 
 export function isAdminEmail(email: string | null | undefined): boolean {
   if (!email) return false;
-  const list = adminEmails();
-  if (list.length === 0) return false;
-  return list.includes(email.toLowerCase());
+  return ADMIN_EMAILS.includes(email.toLowerCase());
 }

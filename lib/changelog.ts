@@ -20,7 +20,7 @@ export const CHANGELOG: ChangelogEntry[] = [
     body: [
       "/admin/analytics shows user counts, signups, note distribution, and engagement — DAU/WAU/MAU plus core actions per day.",
       "User lookup lists every account with note and API-token counts, plus a per-user event trail.",
-      "Events are stored in Supabase (no third-party analytics). Set ADMIN_EMAILS in env to open the dashboard.",
+      "Events are stored in Supabase (no third-party analytics).",
     ],
   },
   {
