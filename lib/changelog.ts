@@ -13,17 +13,6 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
-    id: "2026-06-12-admin-analytics",
-    date: "2026-06-12",
-    emoji: "📊",
-    title: "Admin analytics dashboard",
-    body: [
-      "/admin/analytics shows user counts, signups, note distribution, and engagement — DAU/WAU/MAU plus core actions per day.",
-      "User lookup lists every account with note and API-token counts, plus a per-user event trail.",
-      "Events are stored in Supabase (no third-party analytics).",
-    ],
-  },
-  {
     id: "2026-06-12-api-anywhere",
     date: "2026-06-12",
     emoji: "🔌",
