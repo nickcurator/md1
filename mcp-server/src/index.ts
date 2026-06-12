@@ -11,13 +11,17 @@ import {
   createDoc,
   docUrl,
   editorUrl,
+  findDoc,
   listDocs,
+  publishFlags,
+  shareDoc,
+  shareLines,
   titleFromMarkdown,
   updateDoc,
 } from "./md1-client.js";
 
 const server = new Server(
-  { name: "md1", version: "1.0.0" },
+  { name: "md1", version: "1.1.0" },
   { capabilities: { tools: {} } },
 );
 
@@ -26,16 +30,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "md1_list_docs",
       description:
-        "List markdown notes in md1. Returns id, title, slug, and short metadata.",
+        "List markdown notes in md1. Returns id, title, slug, publish state, and share URL when published.",
       inputSchema: {
         type: "object",
         properties: {},
       },
     },
     {
+      name: "md1_get_doc",
+      description:
+        "Read a note by id, slug, or partial title match. Use to inspect content before sharing.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Note id, slug, or part of the title",
+          },
+        },
+        required: ["query"],
+      },
+    },
+    {
       name: "md1_create_doc",
       description:
-        "Create a new markdown note in md1. Title defaults from first # heading or 'Untitled'.",
+        "Create a markdown note in md1. Set share=true to publish immediately and get a public /d/slug link.",
       inputSchema: {
         type: "object",
         properties: {
@@ -48,9 +67,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description: "Optional title (overrides # heading inference)",
           },
           description: { type: "string" },
+          share: {
+            type: "boolean",
+            description:
+              "Publish immediately and return a shareable /d/slug link (recommended for chat handoff)",
+          },
           isPublished: {
             type: "boolean",
-            description: "Publish to a public /d/slug link",
+            description: "Publish to a public /d/slug link (use share=true instead for the usual flow)",
           },
         },
         required: ["content"],
@@ -68,9 +92,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description: "Absolute or workspace-relative path to .md or .txt",
           },
           title: { type: "string" },
+          share: {
+            type: "boolean",
+            description: "Publish immediately and return a shareable /d/slug link",
+          },
           isPublished: { type: "boolean" },
         },
         required: ["path"],
+      },
+    },
+    {
+      name: "md1_share_doc",
+      description:
+        "Publish an existing note and return its public share link. Accepts id, slug, or partial title.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Note id, slug, or part of the title",
+          },
+        },
+        required: ["query"],
       },
     },
     {
@@ -82,6 +125,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           id: { type: "string" },
           title: { type: "string" },
           content: { type: "string" },
+          share: {
+            type: "boolean",
+            description: "Publish and make the note publicly viewable at /d/slug",
+          },
           isPublished: { type: "boolean" },
         },
         required: ["id"],
@@ -103,10 +150,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         slug: d.slug,
         isPublished: d.isPublished,
         updatedAt: d.updatedAt,
-        url: d.isPublished ? docUrl(d.slug) : editorUrl(),
+        shareUrl: d.isPublished ? docUrl(d.slug) : null,
+        editorUrl: editorUrl(),
       }));
       return {
         content: [{ type: "text", text: JSON.stringify(summary, null, 2) }],
+      };
+    }
+
+    if (name === "md1_get_doc") {
+      const query = String(a.query ?? "").trim();
+      if (!query) throw new Error("query is required");
+      const doc = await findDoc(query);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                id: doc.id,
+                title: doc.title,
+                slug: doc.slug,
+                description: doc.description,
+                isPublished: doc.isPublished,
+                isPublic: doc.isPublic,
+                shareUrl: doc.isPublished ? docUrl(doc.slug) : null,
+                updatedAt: doc.updatedAt,
+                content: doc.content,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
       };
     }
 
@@ -118,19 +194,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const title =
         (typeof a.title === "string" && a.title.trim()) ||
         titleFromMarkdown(content, "Untitled");
+      const flags = publishFlags(
+        a.share === true,
+        typeof a.isPublished === "boolean" ? a.isPublished : undefined,
+      );
       const doc = await createDoc({
         title,
         content,
         description:
           typeof a.description === "string" ? a.description : undefined,
-        isPublished: a.isPublished === true,
+        ...flags,
       });
-      const lines = [
-        `Created note "${doc.title}"`,
-        `Editor: ${editorUrl()}`,
-        doc.isPublished ? `Public: ${docUrl(doc.slug)}` : `Id: ${doc.id}`,
-      ];
-      return { content: [{ type: "text", text: lines.join("\n") }] };
+      const prefix = doc.isPublished ? "Created and shared" : "Created note";
+      return {
+        content: [
+          {
+            type: "text",
+            text: [`${prefix} "${doc.title}"`, ...shareLines(doc)].join("\n"),
+          },
+        ],
+      };
     }
 
     if (name === "md1_create_from_file") {
@@ -141,34 +224,64 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const title =
         (typeof a.title === "string" && a.title.trim()) ||
         titleFromMarkdown(content, fallback || "Untitled");
+      const flags = publishFlags(
+        a.share === true,
+        typeof a.isPublished === "boolean" ? a.isPublished : undefined,
+      );
       const doc = await createDoc({
         title,
         content,
-        isPublished: a.isPublished === true,
+        ...flags,
       });
-      const lines = [
-        `Imported ${path} → "${doc.title}"`,
-        `Editor: ${editorUrl()}`,
-        doc.isPublished ? `Public: ${docUrl(doc.slug)}` : `Id: ${doc.id}`,
-      ];
-      return { content: [{ type: "text", text: lines.join("\n") }] };
+      const prefix = doc.isPublished ? "Imported and shared" : "Imported";
+      return {
+        content: [
+          {
+            type: "text",
+            text: [
+              `${prefix} ${path} → "${doc.title}"`,
+              ...shareLines(doc),
+            ].join("\n"),
+          },
+        ],
+      };
+    }
+
+    if (name === "md1_share_doc") {
+      const query = String(a.query ?? "").trim();
+      if (!query) throw new Error("query is required");
+      const found = await findDoc(query);
+      const doc = found.isPublished
+        ? found
+        : await shareDoc(found.id);
+      return {
+        content: [
+          {
+            type: "text",
+            text: [`Shared "${doc.title}"`, ...shareLines(doc)].join("\n"),
+          },
+        ],
+      };
     }
 
     if (name === "md1_update_doc") {
       const id = String(a.id ?? "").trim();
       if (!id) throw new Error("id is required");
+      const share = a.share === true;
       const doc = await updateDoc(id, {
         ...(typeof a.title === "string" ? { title: a.title } : {}),
         ...(typeof a.content === "string" ? { content: a.content } : {}),
-        ...(typeof a.isPublished === "boolean"
-          ? { isPublished: a.isPublished }
-          : {}),
+        ...(share
+          ? { isPublished: true, isPublic: true }
+          : typeof a.isPublished === "boolean"
+            ? { isPublished: a.isPublished }
+            : {}),
       });
       return {
         content: [
           {
             type: "text",
-            text: `Updated "${doc.title}" (${doc.id})`,
+            text: [`Updated "${doc.title}"`, ...shareLines(doc)].join("\n"),
           },
         ],
       };

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDriveUserFromRequest } from "@/lib/drive-auth-server";
-import { deleteDoc, updateDoc } from "@/lib/shared-docs-server";
+import { deleteDoc, getDocById, updateDoc } from "@/lib/shared-docs-server";
 import {
   MAX_DOC_CONTENT_CHARS,
   MAX_DOC_TITLE_CHARS,
@@ -24,6 +24,18 @@ type PatchBody = {
   isPublic?: boolean;
   comments?: unknown;
 };
+
+export async function GET(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const user = await getDriveUserFromRequest(req);
+  if (!user) return notFound();
+  const { id } = await params;
+  const doc = await getDocById(user.id, id);
+  if (!doc) return notFound();
+  return NextResponse.json({ doc });
+}
 
 export async function PATCH(
   req: Request,

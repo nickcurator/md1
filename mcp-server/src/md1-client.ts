@@ -70,6 +70,35 @@ export async function listDocs(): Promise<SharedDoc[]> {
   return data.docs;
 }
 
+export async function getDoc(id: string): Promise<SharedDoc> {
+  const data = await request<{ doc: SharedDoc }>(`/api/docs/${id}`);
+  return data.doc;
+}
+
+export async function findDoc(query: string): Promise<SharedDoc> {
+  const q = query.trim();
+  if (!q) throw new Error("query is required");
+
+  const docs = await listDocs();
+  const byId = docs.find((d) => d.id === q);
+  if (byId) return byId;
+
+  const bySlug = docs.find((d) => d.slug === q);
+  if (bySlug) return bySlug;
+
+  const needle = q.toLowerCase();
+  const matches = docs.filter((d) => d.title.toLowerCase().includes(needle));
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    throw new Error(
+      `Multiple notes match "${q}": ${matches
+        .map((m) => `"${m.title}" (${m.id})`)
+        .join(", ")}`,
+    );
+  }
+  throw new Error(`No note found for "${q}"`);
+}
+
 export async function createDoc(input: {
   title?: string;
   content: string;
@@ -101,10 +130,35 @@ export async function updateDoc(
   return data.doc;
 }
 
+export async function shareDoc(id: string): Promise<SharedDoc> {
+  return updateDoc(id, { isPublished: true, isPublic: true });
+}
+
 export function docUrl(slug: string): string {
   return `${apiUrl()}/d/${slug}`;
 }
 
 export function editorUrl(): string {
   return `${apiUrl()}/`;
+}
+
+export function shareLines(doc: SharedDoc): string[] {
+  const lines = [`Title: ${doc.title}`, `Id: ${doc.id}`];
+  if (doc.isPublished) {
+    lines.unshift(`Share link: ${docUrl(doc.slug)}`);
+  } else {
+    lines.push("Not published yet — call md1_share_doc to get a share link.");
+  }
+  lines.push(`Editor: ${editorUrl()}`);
+  return lines;
+}
+
+export function publishFlags(share?: boolean, isPublished?: boolean): {
+  isPublished: boolean;
+  isPublic?: boolean;
+} {
+  if (share === true) {
+    return { isPublished: true, isPublic: true };
+  }
+  return { isPublished: isPublished === true };
 }

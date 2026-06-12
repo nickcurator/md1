@@ -30,6 +30,15 @@ curl -s "$MD1_API_URL/api/docs" \
   -H "Authorization: Bearer $MD1_API_TOKEN"
 ```
 
+### Get note
+
+```bash
+curl -s "$MD1_API_URL/api/docs/NOTE_UUID" \
+  -H "Authorization: Bearer $MD1_API_TOKEN"
+```
+
+Returns the full note (including `content`, `slug`, `isPublished`). Use the slug for the public link: `$MD1_API_URL/d/{slug}` when `isPublished` is true.
+
 ### Create note
 
 ```bash
@@ -67,7 +76,13 @@ curl -s -X DELETE "$MD1_API_URL/api/docs/NOTE_UUID" \
 
 ## Optional: Cursor MCP
 
-If you use Cursor, the repo includes `mcp-server/` — a thin wrapper around this API with tools like `md1_create_doc` and `md1_create_from_file`.
+If you use Cursor, the repo includes `mcp-server/` — a thin wrapper around this API with tools like `md1_create_doc`, `md1_create_from_file`, `md1_get_doc`, and `md1_share_doc`.
+
+Typical chat flow:
+
+1. **Create and share in one step** — `md1_create_doc` with `share: true` → returns `Share link: https://md1.space/d/…`
+2. **Share an existing note** — `md1_share_doc` with `query` = id, slug, or part of the title
+3. **Read before sharing** — `md1_get_doc` with the same `query`
 
 ```bash
 cd mcp-server && npm install && npm run build

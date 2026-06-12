@@ -64,6 +64,21 @@ export async function listDocs(ownerId: string): Promise<SharedDoc[]> {
   return (data as Row[]).map(mapRow);
 }
 
+export async function getDocById(
+  ownerId: string,
+  id: string,
+): Promise<SharedDoc | null> {
+  const db = createAdminClient();
+  const { data, error } = await db
+    .from("shared_docs")
+    .select("*")
+    .eq("id", id)
+    .eq("owner_id", ownerId)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? mapRow(data as Row) : null;
+}
+
 export async function getDocBySlug(slug: string): Promise<SharedDoc | null> {
   const db = createAdminClient();
   const { data, error } = await db

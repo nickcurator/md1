@@ -13,6 +13,17 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-06-12-mcp-share",
+    date: "2026-06-12",
+    emoji: "🔗",
+    title: "Share links from chat via MCP",
+    body: [
+      "Cursor MCP can now publish a note and return a public /d/slug link in one step — use share: true on md1_create_doc or md1_create_from_file when you want a link to send people.",
+      "md1_share_doc publishes an existing note by id, slug, or part of the title; md1_get_doc reads it back before you share.",
+      "The API also supports GET /api/docs/:id so any HTTP client can fetch a full note, not just list or mutate it.",
+    ],
+  },
+  {
     id: "2026-06-12-api-anywhere",
     date: "2026-06-12",
     emoji: "🔌",
