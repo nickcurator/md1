@@ -42,6 +42,19 @@ curl -X PATCH ${base}/api/docs/NOTE_UUID \\
 # ${base}/d/SLUG_FROM_RESPONSE`;
 }
 
+function mcpHostedExample(base: string): string {
+  return `{
+  "mcpServers": {
+    "md1": {
+      "url": "${base}/mcp",
+      "headers": {
+        "Authorization": "Bearer m1_YOUR_TOKEN"
+      }
+    }
+  }
+}`;
+}
+
 function mcpNpxExample(base: string): string {
   return `{
   "mcpServers": {
@@ -132,6 +145,7 @@ export default function ApiAccessPanel() {
     () => curlShareExistingExample(base),
     [base],
   );
+  const mcpHosted = useMemo(() => mcpHostedExample(base), [base]);
   const mcpNpx = useMemo(() => mcpNpxExample(base), [base]);
   const mcpFromSource = useMemo(() => mcpFromSourceExample(base), [base]);
   const mcpTools = useMemo(() => mcpToolsExample(), []);
@@ -238,22 +252,29 @@ export default function ApiAccessPanel() {
             MCP server (AI agents)
           </h2>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            Same token. Your notes stay on md1.space — the MCP server is only a
-            lightweight local bridge to the HTTP API (like GitHub MCP). No repo
-            clone needed with npm.
+            Same token. Your notes stay on md1.space. Use hosted MCP (URL only)
+            or a local stdio bridge via npx when your host requires it.
           </p>
         </div>
 
         <div className="space-y-2">
-          <h3 className="text-sm font-medium">npm / npx (recommended)</h3>
+          <h3 className="text-sm font-medium">Hosted MCP (recommended)</h3>
           <p className="text-sm text-[var(--muted)]">
-            Requires Node.js on the machine running the agent. Pin{" "}
-            <code className="text-xs">{MCP_PACKAGE}</code> or use{" "}
-            <code className="text-xs">md1-mcp@latest</code>.{" "}
-            <code className="text-xs">MD1_API_URL</code> is optional outside
-            local dev.
+            Streamable HTTP — no Node.js, no local process. Works in Fable and
+            other hosts that support remote MCP with headers.
           </p>
-          <CopyBlock text={mcpNpx} label="Copy MCP config" />
+          <CopyBlock text={mcpHosted} label="Copy hosted config" />
+        </div>
+
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium">npm / npx (stdio)</h3>
+          <p className="text-sm text-[var(--muted)]">
+            For hosts that only support command-based MCP. Requires Node.js.
+            Pin{" "}
+            <code className="text-xs">{MCP_PACKAGE}</code> or use{" "}
+            <code className="text-xs">md1-mcp@latest</code>.
+          </p>
+          <CopyBlock text={mcpNpx} label="Copy npx config" />
         </div>
 
         <details className="rounded-md border border-[var(--border)] bg-[var(--bg)]">
@@ -271,12 +292,6 @@ export default function ApiAccessPanel() {
             <CopyBlock text={mcpFromSource} label="Copy dev config" />
           </div>
         </details>
-
-        <p className="text-sm text-[var(--muted)]">
-          <span className="font-medium text-[var(--fg)]">Hosted MCP</span>{" "}
-          (connect via URL + Bearer token, no local process) — planned, not
-          available yet.
-        </p>
 
         <div className="space-y-2">
           <h3 className="text-sm font-medium">Tools &amp; examples</h3>

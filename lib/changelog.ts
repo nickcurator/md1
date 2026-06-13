@@ -13,6 +13,17 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-06-13-hosted-mcp",
+    date: "2026-06-13",
+    emoji: "☁️",
+    title: "Hosted MCP — token only, no local setup",
+    body: [
+      "Connect AI agents at https://md1.space/mcp with your API token — Streamable HTTP, no Node.js or npx required.",
+      "Settings shows hosted config first, with npx stdio as an alternative for older MCP hosts.",
+      "Same tools as before; md1_create_from_file stays stdio-only (hosted agents should use md1_create_doc).",
+    ],
+  },
+  {
     id: "2026-06-12-mcp-npx",
     date: "2026-06-12",
     emoji: "📦",

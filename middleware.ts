@@ -18,6 +18,10 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  if (pathname === "/mcp" && hasApiToken(request)) {
+    return NextResponse.next();
+  }
+
   if (pathname.startsWith("/admin")) {
     let response = NextResponse.next({ request });
     const supabase = createDriveMiddlewareClient(request, response);
@@ -59,6 +63,7 @@ export const config = {
     "/",
     "/settings",
     "/whats-new",
+    "/mcp",
     "/admin/:path*",
     "/api/docs/:path*",
     "/api/tokens/:path*",

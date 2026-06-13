@@ -100,9 +100,28 @@ curl -s -X DELETE "$MD1_API_URL/api/docs/NOTE_UUID" \
 
 ## MCP server
 
-Thin wrapper around the same API for AI agents. Your notes stay on md1.space — the MCP process is a local stdio bridge (same pattern as GitHub MCP). See also [MCP.md](./MCP.md).
+Thin wrapper around the same API for AI agents. See [MCP.md](./MCP.md).
 
-### Recommended: npm / npx
+### Recommended: hosted MCP (URL only)
+
+No local process. Same Bearer token as curl:
+
+```json
+{
+  "mcpServers": {
+    "md1": {
+      "url": "https://md1.space/mcp",
+      "headers": {
+        "Authorization": "Bearer m1_YOUR_TOKEN"
+      }
+    }
+  }
+}
+```
+
+Supports GET, POST, and DELETE (Streamable HTTP). `md1_create_from_file` is stdio-only.
+
+### Alternative: npm / npx (stdio)
 
 No repo clone or build. Add to any MCP host:
 
@@ -148,10 +167,6 @@ cd mcp-server && npm install && npm run build
 ```
 
 Use `node` + absolute path to `dist/index.js` — see `mcp.json.example` in the repo.
-
-### Hosted MCP (planned)
-
-Streamable HTTP at `https://md1.space/mcp` with the same Bearer token — not available yet.
 
 ## Local dev
 

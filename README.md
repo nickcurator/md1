@@ -22,6 +22,7 @@ npm run dev                  # http://localhost:3001
 | `/whats-new` | Product changelog |
 | `/admin/analytics` | Internal metrics (admin allow-list in code) |
 | `/d/[slug]` | Public published doc |
+| `/mcp` | Hosted MCP (Streamable HTTP, Bearer `m1_…`) |
 | `/api/docs` | CRUD API (cookie or `Bearer m1_…`) |
 | `/api/tokens` | Manage API tokens (cookie only) |
 | `/api/auth/*` | OAuth |
