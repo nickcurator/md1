@@ -13,47 +13,15 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
-    id: "2026-06-13-hosted-mcp",
+    id: "2026-06-13-api-mcp",
     date: "2026-06-13",
-    emoji: "☁️",
-    title: "Hosted MCP — token only, no local setup",
-    body: [
-      "Connect AI agents at https://md1.space/mcp with your API token — Streamable HTTP, no Node.js or npx required.",
-      "Settings shows hosted config first, with npx stdio as an alternative for older MCP hosts.",
-      "Same tools as before; md1_create_from_file stays stdio-only (hosted agents should use md1_create_doc).",
-    ],
-  },
-  {
-    id: "2026-06-12-mcp-npx",
-    date: "2026-06-12",
-    emoji: "📦",
-    title: "MCP via npm — no repo clone",
-    body: [
-      "Connect AI agents with npx md1-mcp and your API token from Settings — no git clone or local build.",
-      "Settings now shows the recommended npx config, tool examples, and a from-source option for contributors.",
-      "Hosted MCP over HTTPS is planned; stdio via npm is the supported path today.",
-    ],
-  },
-  {
-    id: "2026-06-12-mcp-share",
-    date: "2026-06-12",
-    emoji: "🔗",
-    title: "Share links from chat via MCP",
-    body: [
-      "The MCP server can publish a note and return a public /d/slug link in one step — use share: true on md1_create_doc or md1_create_from_file when you want a link to send people.",
-      "md1_share_doc publishes an existing note by id, slug, or part of the title; md1_get_doc reads it back before you share.",
-      "The API also supports GET /api/docs/:id so any HTTP client can fetch a full note, not just list or mutate it.",
-    ],
-  },
-  {
-    id: "2026-06-12-api-anywhere",
-    date: "2026-06-12",
     emoji: "🔌",
-    title: "API access for any tool",
+    title: "API and MCP access",
     body: [
-      "Personal API tokens in Settings work with curl, your own scripts, CI, Shortcuts, Raycast — any HTTP client, not just one editor.",
-      "Bearer auth on /api/docs: list, create, update, and delete notes without opening the browser.",
-      "Settings shows copy-paste curl examples, every HTTP endpoint, and MCP server setup — same token for both.",
+      "Personal API tokens in Settings — one token for scripts and AI agents.",
+      "HTTP API on /api/docs: list, read, create, update, delete, and publish notes. Share link: /d/slug when published.",
+      "MCP for agents: paste the hosted config from Settings → MCP (/mcp + Bearer token). Stdio via npx is under «Host needs stdio» if your app requires it.",
+      "MCP tools: list and read notes, create markdown, share in one step (share: true or md1_share_doc).",
     ],
   },
   {
