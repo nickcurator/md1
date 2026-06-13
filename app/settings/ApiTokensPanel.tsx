@@ -101,8 +101,7 @@ export default function ApiTokensPanel() {
         <div>
           <h2 className="text-base font-semibold text-[var(--fg)]">API tokens</h2>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            For curl, scripts, CI, or any tool that speaks HTTP. Copy it into
-            your env or config — shown only once.
+            Shown once at creation — use for API and MCP below.
           </p>
         </div>
       </div>
