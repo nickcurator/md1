@@ -28,7 +28,7 @@ npm run dev                  # http://localhost:3001
 
 ## API access
 
-See [docs/API.md](docs/API.md) — Bearer tokens for HTTP (curl, scripts, automations) and the bundled MCP server for agents.
+See [docs/API.md](docs/API.md) and [docs/MCP.md](docs/MCP.md) — Bearer tokens for HTTP; **`npx md1-mcp`** for agents (no repo clone).
 
 ## Deploy (Vercel)
 

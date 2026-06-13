@@ -1,13 +1,37 @@
 {
   "name": "md1-mcp",
-  "version": "1.0.0",
-  "private": true,
+  "version": "1.1.0",
+  "description": "MCP server for md1.space — manage markdown notes from AI agents",
+  "license": "MIT",
+  "author": "nickcurator",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nickcurator/md1.git",
+    "directory": "mcp-server"
+  },
+  "homepage": "https://md1.space",
+  "bugs": "https://github.com/nickcurator/md1/issues",
+  "keywords": [
+    "mcp",
+    "md1",
+    "markdown",
+    "notes",
+    "modelcontextprotocol"
+  ],
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "bin": {
     "md1-mcp": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",
+    "prepack": "npm run build",
     "start": "node dist/index.js",
     "prepare": "npm run build"
   },

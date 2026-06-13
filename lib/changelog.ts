@@ -13,6 +13,17 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-06-12-mcp-npx",
+    date: "2026-06-12",
+    emoji: "📦",
+    title: "MCP via npm — no repo clone",
+    body: [
+      "Connect AI agents with npx md1-mcp and your API token from Settings — no git clone or local build.",
+      "Settings now shows the recommended npx config, tool examples, and a from-source option for contributors.",
+      "Hosted MCP over HTTPS is planned; stdio via npm is the supported path today.",
+    ],
+  },
+  {
     id: "2026-06-12-mcp-share",
     date: "2026-06-12",
     emoji: "🔗",

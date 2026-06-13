@@ -100,19 +100,33 @@ curl -s -X DELETE "$MD1_API_URL/api/docs/NOTE_UUID" \
 
 ## MCP server
 
-`mcp-server/` is a thin wrapper around the same API — tools like `md1_create_doc`, `md1_create_from_file`, `md1_get_doc`, and `md1_share_doc`.
+Thin wrapper around the same API for AI agents. Your notes stay on md1.space — the MCP process is a local stdio bridge (same pattern as GitHub MCP). See also [MCP.md](./MCP.md).
 
-Typical agent flow:
+### Recommended: npm / npx
+
+No repo clone or build. Add to any MCP host:
+
+```json
+{
+  "mcpServers": {
+    "md1": {
+      "command": "npx",
+      "args": ["-y", "md1-mcp@1.1.0"],
+      "env": {
+        "MD1_API_TOKEN": "m1_YOUR_TOKEN"
+      }
+    }
+  }
+}
+```
+
+Pin `md1-mcp@1.1.0` for stability. `MD1_API_URL` is optional (default `https://md1.space`).
+
+### Typical agent flow
 
 1. **Create and share in one step** — `md1_create_doc` with `share: true` → returns `Share link: https://md1.space/d/…`
 2. **Share an existing note** — `md1_share_doc` with `query` = id, slug, or part of the title
 3. **Read before sharing** — `md1_get_doc` with the same `query`
-
-```bash
-cd mcp-server && npm install && npm run build
-```
-
-Add the server to your MCP host config (see `mcp.json.example` in the repo). Same `MD1_API_TOKEN` and optional `MD1_API_URL` as curl.
 
 ### Tools
 
@@ -126,6 +140,18 @@ Add the server to your MCP host config (see `mcp.json.example` in the repo). Sam
 | `md1_update_doc` | Update content or publish with `share: true` |
 
 `md1_share_doc` and `share: true` use the same `isPublished` flow as the HTTP API above.
+
+### From source (contributors)
+
+```bash
+cd mcp-server && npm install && npm run build
+```
+
+Use `node` + absolute path to `dist/index.js` — see `mcp.json.example` in the repo.
+
+### Hosted MCP (planned)
+
+Streamable HTTP at `https://md1.space/mcp` with the same Bearer token — not available yet.
 
 ## Local dev
 

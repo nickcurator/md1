@@ -17,5 +17,5 @@ When the user says **"отправь в md1"**, **"send to md1"**, **"save to md
 
 If MCP tools are unavailable, tell the user to:
 - Create an API token at https://md1.space/settings (works with curl/any HTTP client too)
-- Configure the md1 MCP server from `mcp.json.example` and [docs/API.md](docs/API.md)
+- Add md1 to their MCP host with `npx -y md1-mcp@1.1.0` and `MD1_API_TOKEN` (see Settings or `docs/MCP.md`)
 - Restart the MCP host after config changes

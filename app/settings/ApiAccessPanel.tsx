@@ -3,6 +3,9 @@
 import { useMemo, useState } from "react";
 import { Copy, Terminal } from "lucide-react";
 
+/** Pin in MCP host config; bump with mcp-server/package.json on release. */
+const MCP_PACKAGE = "md1-mcp@1.1.0";
+
 function apiBaseUrl(): string {
   if (typeof window !== "undefined" && window.location.origin) {
     return window.location.origin;
@@ -39,7 +42,22 @@ curl -X PATCH ${base}/api/docs/NOTE_UUID \\
 # ${base}/d/SLUG_FROM_RESPONSE`;
 }
 
-function mcpExample(base: string): string {
+function mcpNpxExample(base: string): string {
+  return `{
+  "mcpServers": {
+    "md1": {
+      "command": "npx",
+      "args": ["-y", "${MCP_PACKAGE}"],
+      "env": {
+        "MD1_API_TOKEN": "m1_YOUR_TOKEN",
+        "MD1_API_URL": "${base}"
+      }
+    }
+  }
+}`;
+}
+
+function mcpFromSourceExample(base: string): string {
   return `{
   "mcpServers": {
     "md1": {
@@ -114,7 +132,8 @@ export default function ApiAccessPanel() {
     () => curlShareExistingExample(base),
     [base],
   );
-  const mcpConfig = useMemo(() => mcpExample(base), [base]);
+  const mcpNpx = useMemo(() => mcpNpxExample(base), [base]);
+  const mcpFromSource = useMemo(() => mcpFromSourceExample(base), [base]);
   const mcpTools = useMemo(() => mcpToolsExample(), []);
 
   return (
@@ -216,22 +235,48 @@ export default function ApiAccessPanel() {
       <div className="border-t border-[var(--border)] pt-6 space-y-4">
         <div>
           <h2 className="text-base font-semibold text-[var(--fg)]">
-            MCP server
+            MCP server (AI agents)
           </h2>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            Same token. Wraps the API above for agents and chat tools — add to
-            any MCP-compatible host. Build:{" "}
-            <code className="rounded bg-[var(--bg)] px-1 py-0.5 text-xs">
-              cd mcp-server && npm install && npm run build
-            </code>
-            .
+            Same token. Your notes stay on md1.space — the MCP server is only a
+            lightweight local bridge to the HTTP API (like GitHub MCP). No repo
+            clone needed with npm.
           </p>
         </div>
 
         <div className="space-y-2">
-          <h3 className="text-sm font-medium">Host config</h3>
-          <CopyBlock text={mcpConfig} label="Copy MCP config" />
+          <h3 className="text-sm font-medium">npm / npx (recommended)</h3>
+          <p className="text-sm text-[var(--muted)]">
+            Requires Node.js on the machine running the agent. Pin{" "}
+            <code className="text-xs">{MCP_PACKAGE}</code> or use{" "}
+            <code className="text-xs">md1-mcp@latest</code>.{" "}
+            <code className="text-xs">MD1_API_URL</code> is optional outside
+            local dev.
+          </p>
+          <CopyBlock text={mcpNpx} label="Copy MCP config" />
         </div>
+
+        <details className="rounded-md border border-[var(--border)] bg-[var(--bg)]">
+          <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+            From source (contributors)
+          </summary>
+          <div className="space-y-3 border-t border-[var(--border)] px-4 py-4">
+            <p className="text-sm text-[var(--muted)]">
+              Clone the repo, then{" "}
+              <code className="text-xs">
+                cd mcp-server && npm install && npm run build
+              </code>
+              .
+            </p>
+            <CopyBlock text={mcpFromSource} label="Copy dev config" />
+          </div>
+        </details>
+
+        <p className="text-sm text-[var(--muted)]">
+          <span className="font-medium text-[var(--fg)]">Hosted MCP</span>{" "}
+          (connect via URL + Bearer token, no local process) — planned, not
+          available yet.
+        </p>
 
         <div className="space-y-2">
           <h3 className="text-sm font-medium">Tools &amp; examples</h3>
