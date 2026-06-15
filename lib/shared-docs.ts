@@ -15,6 +15,7 @@ export type DocComment = {
 export type SharedDoc = {
   id: string;
   ownerId: string;
+  folderId: string | null;
   slug: string;
   title: string;
   description: string;
@@ -29,12 +30,25 @@ export type SharedDoc = {
   updatedAt: string;
 };
 
+export type DriveFolder = {
+  id: string;
+  ownerId: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 // Upper bound on a document body. Comfortably fits long context docs while
 // keeping a single paste from pushing an unbounded blob through the function
 // body and into the table.
 export const MAX_DOC_CONTENT_CHARS = 200_000;
 export const MAX_DOC_TITLE_CHARS = 200;
 export const MAX_DOC_COMMENTS = 200;
+export const MAX_FOLDER_NAME_CHARS = 80;
+
+export function normalizeFolderName(raw: unknown): string {
+  return typeof raw === "string" ? raw.trim() : "";
+}
 
 export function parseDocComments(raw: unknown): DocComment[] {
   if (!Array.isArray(raw)) return [];

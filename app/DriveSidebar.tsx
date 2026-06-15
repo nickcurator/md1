@@ -1,9 +1,9 @@
 "use client";
 
-import { Plus, Trash2, Upload } from "lucide-react";
+import { Folder, FolderPlus, Plus, Trash2, Upload } from "lucide-react";
 import AppLogo from "@/components/AppLogo";
 import type { DriveUser } from "@/lib/drive-users-server";
-import type { SharedDoc } from "@/lib/shared-docs";
+import type { DriveFolder, SharedDoc } from "@/lib/shared-docs";
 import DriveProfileButton from "./DriveProfileButton";
 
 function formatUpdated(iso: string): string {
@@ -21,12 +21,17 @@ export default function DriveSidebar({
   user,
   isAdmin = false,
   docs,
+  allDocs,
+  folders,
+  selectedFolderId,
   selectedId,
   dragActive,
   busy,
+  onSelectFolder,
   onSelect,
   onDelete,
   onNew,
+  onNewFolder,
   onUploadFiles,
   onDragEnter,
   onDragOver,
@@ -36,18 +41,32 @@ export default function DriveSidebar({
   user: DriveUser;
   isAdmin?: boolean;
   docs: SharedDoc[];
+  allDocs: SharedDoc[];
+  folders: DriveFolder[];
+  selectedFolderId: string | null;
   selectedId: string | null;
   dragActive: boolean;
   busy: boolean;
+  onSelectFolder: (folderId: string | null) => void;
   onSelect: (doc: SharedDoc) => void;
   onDelete: (doc: SharedDoc) => void;
   onNew: () => void;
+  onNewFolder: () => void;
   onUploadFiles: (files: FileList | File[]) => void;
   onDragEnter: (e: React.DragEvent) => void;
   onDragOver: (e: React.DragEvent) => void;
   onDragLeave: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
 }) {
+  const rootCount = allDocs.filter((doc) => !doc.folderId).length;
+  const folderCounts = new Map<string, number>();
+  for (const doc of allDocs) {
+    if (!doc.folderId) continue;
+    folderCounts.set(doc.folderId, (folderCounts.get(doc.folderId) ?? 0) + 1);
+  }
+  const selectedFolder = folders.find((f) => f.id === selectedFolderId);
+  const listTitle = selectedFolder?.name ?? "My Drive";
+
   return (
     <aside
       className="relative flex h-full w-[280px] shrink-0 flex-col border-r border-[var(--border)] bg-[var(--bg)]"
@@ -102,10 +121,60 @@ export default function DriveSidebar({
         </div>
       </div>
 
+      <div className="border-b border-[var(--border)] p-2">
+        <div className="mb-1 flex items-center justify-between px-2">
+          <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
+            Folders
+          </h3>
+          <button
+            type="button"
+            onClick={onNewFolder}
+            disabled={busy}
+            title="New folder"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
+          >
+            <FolderPlus size={15} />
+          </button>
+        </div>
+        <div className="space-y-0.5">
+          <button
+            type="button"
+            onClick={() => onSelectFolder(null)}
+            className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
+              selectedFolderId === null
+                ? "bg-[var(--card)] text-[var(--fg)]"
+                : "text-[var(--muted)] hover:bg-[var(--card)]/80 hover:text-[var(--fg)]"
+            }`}
+          >
+            <Folder size={15} />
+            <span className="min-w-0 flex-1 truncate">My Drive</span>
+            <span className="text-xs tabular-nums">{rootCount}</span>
+          </button>
+          {folders.map((folder) => (
+            <button
+              key={folder.id}
+              type="button"
+              onClick={() => onSelectFolder(folder.id)}
+              className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
+                selectedFolderId === folder.id
+                  ? "bg-[var(--card)] text-[var(--fg)]"
+                  : "text-[var(--muted)] hover:bg-[var(--card)]/80 hover:text-[var(--fg)]"
+              }`}
+            >
+              <Folder size={15} />
+              <span className="min-w-0 flex-1 truncate">{folder.name}</span>
+              <span className="text-xs tabular-nums">
+                {folderCounts.get(folder.id) ?? 0}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto p-2">
         {docs.length === 0 ? (
           <p className="px-2 py-6 text-center text-xs leading-relaxed text-[var(--muted)]">
-            No notes yet.
+            No notes in {listTitle}.
             <br />
             Create one, upload, or drop .md files here.
           </p>

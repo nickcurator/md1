@@ -57,8 +57,27 @@ Body fields (all optional except you need content for a useful note):
 | `title` | string | Default `Untitled` |
 | `content` | string | Markdown, max 200k chars |
 | `description` | string | |
+| `folderId` | string \| null | Optional folder id; omit/null for My Drive |
 | `isPublished` | boolean | Default `false`. When `true`, note is live at `/d/{slug}` |
 | `isPublic` | boolean | Set automatically when publishing; public read without login |
+
+### Folders
+
+```bash
+curl -s "$MD1_API_URL/api/folders" \
+  -H "Authorization: Bearer $MD1_API_TOKEN"
+```
+
+Create a folder:
+
+```bash
+curl -s -X POST "$MD1_API_URL/api/folders" \
+  -H "Authorization: Bearer $MD1_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Ideas"}'
+```
+
+Use the returned `folder.id` as `folderId` when creating or updating notes.
 
 ### Share / publish
 
@@ -89,6 +108,15 @@ curl -s -X PATCH "$MD1_API_URL/api/docs/NOTE_UUID" \
   -H "Authorization: Bearer $MD1_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"content":"# Updated\n"}'
+```
+
+Move a note to a folder:
+
+```bash
+curl -s -X PATCH "$MD1_API_URL/api/docs/NOTE_UUID" \
+  -H "Authorization: Bearer $MD1_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"folderId":"FOLDER_UUID"}'
 ```
 
 ### Delete note

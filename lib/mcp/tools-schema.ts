@@ -1,6 +1,6 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 
-export const MCP_SERVER_VERSION = "1.2.0";
+export const MCP_SERVER_VERSION = "1.3.0";
 
 export const MD1_MCP_TOOLS: Tool[] = [
   {
@@ -43,6 +43,10 @@ export const MD1_MCP_TOOLS: Tool[] = [
           description: "Optional title (overrides # heading inference)",
         },
         description: { type: "string" },
+        folderId: {
+          type: "string",
+          description: "Optional md1 folder id. Omit for My Drive.",
+        },
         share: {
           type: "boolean",
           description:
@@ -102,6 +106,10 @@ export const MD1_MCP_TOOLS: Tool[] = [
         id: { type: "string" },
         title: { type: "string" },
         content: { type: "string" },
+        folderId: {
+          type: "string",
+          description: "Move note to this folder id. Empty string moves to My Drive.",
+        },
         share: {
           type: "boolean",
           description: "Publish and make the note publicly viewable at /d/slug",

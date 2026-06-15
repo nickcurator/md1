@@ -6,10 +6,11 @@ import {
   Copy,
   ExternalLink,
   Eye,
+  Folder,
   Pencil,
   Trash2,
 } from "lucide-react";
-import { shareDocPath, type DocComment } from "@/lib/shared-docs";
+import { shareDocPath, type DocComment, type DriveFolder } from "@/lib/shared-docs";
 import DriveAnnotatedTextarea from "./DriveAnnotatedTextarea";
 import DriveCommentMargin from "./DriveCommentMargin";
 import DriveCommentMarkdown from "./DriveCommentMarkdown";
@@ -49,6 +50,7 @@ type Form = {
   description: string;
   content: string;
   comments: DocComment[];
+  folderId: string | null;
   isPublished: boolean;
   isPublic: boolean;
 };
@@ -56,6 +58,7 @@ type Form = {
 export default function DriveEditor({
   editingId,
   form,
+  folders,
   slug,
   showPreview,
   busy,
@@ -77,6 +80,7 @@ export default function DriveEditor({
 }: {
   editingId: string | null;
   form: Form;
+  folders: DriveFolder[];
   slug?: string;
   showPreview: boolean;
   busy: boolean;
@@ -299,6 +303,29 @@ export default function DriveEditor({
           {showPreview ? <Pencil size={15} /> : <Eye size={15} />}
           {showPreview ? "Edit" : "Preview"}
         </button>
+
+        <label
+          title="Folder"
+          className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border)] px-2 py-1.5 text-sm text-[var(--muted)]"
+        >
+          <Folder size={15} />
+          <select
+            aria-label="Folder"
+            value={form.folderId ?? ""}
+            disabled={busy}
+            onChange={(e) =>
+              onFormChange({ folderId: e.target.value || null })
+            }
+            className="max-w-40 bg-transparent text-[var(--fg)] outline-none disabled:opacity-50"
+          >
+            <option value="">My Drive</option>
+            {folders.map((folder) => (
+              <option key={folder.id} value={folder.id}>
+                {folder.name}
+              </option>
+            ))}
+          </select>
+        </label>
 
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {!form.isPublished ? (

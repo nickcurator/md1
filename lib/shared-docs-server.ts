@@ -1,7 +1,10 @@
 import { createAdminClient } from "@/lib/supabaseAdmin";
 import {
+  MAX_FOLDER_NAME_CHARS,
+  normalizeFolderName,
   parseDocComments,
   type DocComment,
+  type DriveFolder,
   type SharedDoc,
 } from "@/lib/shared-docs";
 
@@ -14,6 +17,7 @@ import {
 type Row = {
   id: string;
   owner_id: string;
+  folder_id: string | null;
   slug: string;
   title: string;
   description: string;
@@ -25,10 +29,19 @@ type Row = {
   updated_at: string;
 };
 
+type FolderRow = {
+  id: string;
+  owner_id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+};
+
 function mapRow(r: Row): SharedDoc {
   return {
     id: r.id,
     ownerId: r.owner_id,
+    folderId: r.folder_id,
     slug: r.slug,
     title: r.title,
     description: r.description,
@@ -41,8 +54,35 @@ function mapRow(r: Row): SharedDoc {
   };
 }
 
+function mapFolderRow(r: FolderRow): DriveFolder {
+  return {
+    id: r.id,
+    ownerId: r.owner_id,
+    name: r.name,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
 function newSlug(): string {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+}
+
+async function assertFolderOwner(
+  ownerId: string,
+  folderId: string | null | undefined,
+): Promise<string | null | undefined> {
+  if (folderId === undefined || folderId === null) return folderId;
+  const db = createAdminClient();
+  const { data, error } = await db
+    .from("drive_folders")
+    .select("id")
+    .eq("id", folderId)
+    .eq("owner_id", ownerId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error("Folder not found");
+  return folderId;
 }
 
 export function canViewDoc(
@@ -62,6 +102,48 @@ export async function listDocs(ownerId: string): Promise<SharedDoc[]> {
     .order("updated_at", { ascending: false });
   if (error) throw error;
   return (data as Row[]).map(mapRow);
+}
+
+export async function listFolders(ownerId: string): Promise<DriveFolder[]> {
+  const db = createAdminClient();
+  const { data, error } = await db
+    .from("drive_folders")
+    .select("*")
+    .eq("owner_id", ownerId)
+    .order("name", { ascending: true });
+  if (error) throw error;
+  return (data as FolderRow[]).map(mapFolderRow);
+}
+
+export async function createFolder(
+  ownerId: string,
+  name: string,
+): Promise<DriveFolder> {
+  const cleanName = normalizeFolderName(name);
+  if (!cleanName) throw new Error("Folder name is required");
+  if (cleanName.length > MAX_FOLDER_NAME_CHARS) {
+    throw new Error("Folder name too long");
+  }
+  const db = createAdminClient();
+  const { data, error } = await db
+    .from("drive_folders")
+    .insert({
+      owner_id: ownerId,
+      name: cleanName,
+    })
+    .select("*")
+    .single();
+  if (!error) return mapFolderRow(data as FolderRow);
+  if (error.code !== "23505") throw error;
+
+  const existing = await db
+    .from("drive_folders")
+    .select("*")
+    .eq("owner_id", ownerId)
+    .eq("name", cleanName)
+    .single();
+  if (existing.error) throw existing.error;
+  return mapFolderRow(existing.data as FolderRow);
 }
 
 export async function getDocById(
@@ -98,17 +180,20 @@ export async function createDoc(
     title: string;
     description?: string;
     content: string;
+    folderId?: string | null;
     isPublished?: boolean;
     isPublic?: boolean;
     comments?: DocComment[];
   },
 ): Promise<SharedDoc> {
   const db = createAdminClient();
+  const folderId = await assertFolderOwner(ownerId, input.folderId);
   for (let attempt = 0; attempt < 3; attempt++) {
     const { data, error } = await db
       .from("shared_docs")
       .insert({
         owner_id: ownerId,
+        folder_id: folderId ?? null,
         slug: newSlug(),
         title: input.title,
         description: input.description ?? "",
@@ -135,6 +220,7 @@ export async function updateDoc(
     title: string;
     description: string;
     content: string;
+    folderId: string | null;
     isPublished: boolean;
     isPublic: boolean;
     comments: DocComment[];
@@ -144,6 +230,9 @@ export async function updateDoc(
   const row: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   };
+  if (patch.folderId !== undefined) {
+    row.folder_id = await assertFolderOwner(ownerId, patch.folderId);
+  }
   if (patch.title !== undefined) row.title = patch.title;
   if (patch.description !== undefined) row.description = patch.description;
   if (patch.content !== undefined) row.content = patch.content;

@@ -27,6 +27,7 @@ type CreateBody = {
   title?: string;
   description?: string;
   content?: string;
+  folderId?: string | null;
   isPublished?: boolean;
   isPublic?: boolean;
   comments?: unknown;
@@ -54,12 +55,22 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
+  const folderId =
+    body.folderId === undefined || body.folderId === null
+      ? null
+      : typeof body.folderId === "string"
+        ? body.folderId.trim() || null
+        : undefined;
+  if (folderId === undefined) {
+    return NextResponse.json({ error: "Invalid folderId" }, { status: 400 });
+  }
 
   const viaApi = Boolean(req.headers.get("authorization")?.startsWith("Bearer "));
   const doc = await createDoc(user.id, {
     title,
     description: (body.description ?? "").trim(),
     content,
+    folderId,
     isPublished: body.isPublished ?? false,
     isPublic: body.isPublic,
     comments: parseDocComments(body.comments ?? []),
