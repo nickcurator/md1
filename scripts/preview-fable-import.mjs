@@ -3,6 +3,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const DEFAULT_LIMIT = 20;
 
@@ -60,7 +61,7 @@ function parseArgs(argv) {
   return opts;
 }
 
-function readJson(filePath) {
+export function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
@@ -124,7 +125,7 @@ function sortByFolderAndTitle(a, b) {
   return a.title.localeCompare(b.title);
 }
 
-function buildPreview(snapshot, opts) {
+export function buildPreview(snapshot, opts) {
   const notes = Array.isArray(snapshot.notes) ? snapshot.notes : [];
   const settings =
     snapshot.notesFolderSettings && typeof snapshot.notesFolderSettings === "object"
@@ -281,7 +282,7 @@ function printHuman(preview, opts) {
   console.log(out.join("\n"));
 }
 
-function main() {
+export function main() {
   try {
     const opts = parseArgs(process.argv.slice(2));
     if (opts.help) {
@@ -308,4 +309,6 @@ function main() {
   }
 }
 
-main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}
