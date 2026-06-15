@@ -32,5 +32,37 @@ The write importer should be add-only and idempotent:
 - preserve Fable note text as markdown content
 - keep Fable untouched
 
+## Add-Only Import
+
+Dry-run is the default:
+
+```bash
+npm run import:fable -- --snapshot /path/to/fable-notes-snapshot.json --no-titles
+```
+
+Check current MD1 DB state without writing:
+
+```bash
+npm run import:fable -- \
+  --snapshot /path/to/fable-notes-snapshot.json \
+  --owner-email you@example.com \
+  --check-db \
+  --no-titles
+```
+
+Execute requires an explicit flag and a secret-like decision:
+
+```bash
+npm run import:fable -- \
+  --snapshot /path/to/fable-notes-snapshot.json \
+  --owner-email you@example.com \
+  --execute \
+  --allow-secret-like
+```
+
+Use `--skip-secret-like` instead of `--allow-secret-like` when credentials or
+other secrets should stay out of MD1. The importer never updates or deletes
+Fable data. Re-running it skips docs with the same import identity.
+
 Do not disable Fable notes until the imported MD1 docs have been reviewed in the
 MD1 UI.
