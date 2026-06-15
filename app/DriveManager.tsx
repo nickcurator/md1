@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DriveUser } from "@/lib/drive-users-server";
-import { shareDocPath, type DocComment, type SharedDoc } from "@/lib/shared-docs";
+import {
+  shareDocPath,
+  type DocComment,
+  type DriveFolder,
+  type SharedDoc,
+} from "@/lib/shared-docs";
 import ThemeToggle from "@/components/ThemeToggle";
 import DriveDeleteDialog from "./DriveDeleteDialog";
 import DriveEditor from "./DriveEditor";
@@ -16,6 +21,7 @@ type Form = {
   description: string;
   content: string;
   comments: DocComment[];
+  folderId: string | null;
   isPublished: boolean;
   isPublic: boolean;
 };
@@ -25,6 +31,7 @@ const EMPTY_FORM: Form = {
   description: "",
   content: "",
   comments: [],
+  folderId: null,
   isPublished: false,
   isPublic: false,
 };
@@ -37,14 +44,20 @@ function snapshot(id: string, form: Form): string {
 
 export default function DriveManager({
   initialDocs,
+  initialFolders,
   user,
   isAdmin = false,
 }: {
   initialDocs: SharedDoc[];
+  initialFolders: DriveFolder[];
   user: DriveUser;
   isAdmin?: boolean;
 }) {
   const [docs, setDocs] = useState<SharedDoc[]>(initialDocs);
+  const [folders, setFolders] = useState<DriveFolder[]>(initialFolders);
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(
+    initialDocs[0]?.folderId ?? null,
+  );
   const [editingId, setEditingId] = useState<string | null>(
     initialDocs[0]?.id ?? null,
   );
@@ -55,6 +68,7 @@ export default function DriveManager({
           description: initialDocs[0].description,
           content: initialDocs[0].content,
           comments: initialDocs[0].comments,
+          folderId: initialDocs[0].folderId,
           isPublished: initialDocs[0].isPublished,
           isPublic: initialDocs[0].isPublic,
         }
@@ -96,6 +110,9 @@ export default function DriveManager({
 
   const selectedDoc =
     editingId !== null ? docs.find((d) => d.id === editingId) : undefined;
+  const visibleDocs = docs.filter(
+    (doc) => (doc.folderId ?? null) === selectedFolderId,
+  );
 
   const applySavedDoc = useCallback((saved: SharedDoc) => {
     setDocs((prev) => {
@@ -180,6 +197,9 @@ export default function DriveManager({
 
   const handleFormChange = useCallback(
     (patch: Partial<Form>) => {
+      if (Object.prototype.hasOwnProperty.call(patch, "folderId")) {
+        setSelectedFolderId(patch.folderId ?? null);
+      }
       setForm((f) => {
         const next = { ...f, ...patch };
         formRef.current = next;
@@ -213,9 +233,11 @@ export default function DriveManager({
         description: doc.description,
         content: doc.content,
         comments: doc.comments,
+        folderId: doc.folderId,
         isPublished: doc.isPublished,
         isPublic: doc.isPublic,
       };
+      setSelectedFolderId(doc.folderId ?? null);
       setForm(next);
       formRef.current = next;
       lastSavedRef.current = snapshot(doc.id, next);
@@ -236,6 +258,7 @@ export default function DriveManager({
         description: "",
         content: "",
         comments: [],
+        folderId: selectedFolderId,
         isPublished: false,
         isPublic: false,
       });
@@ -247,6 +270,7 @@ export default function DriveManager({
         description: saved.description,
         content: saved.content,
         comments: saved.comments,
+        folderId: saved.folderId,
         isPublished: saved.isPublished,
         isPublic: saved.isPublic,
       };
@@ -261,7 +285,7 @@ export default function DriveManager({
     } finally {
       setBusy(false);
     }
-  }, [createDocOnServer, flushSave]);
+  }, [createDocOnServer, flushSave, selectedFolderId]);
 
   const importFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -281,6 +305,7 @@ export default function DriveManager({
             description: "",
             content,
             comments: [],
+            folderId: selectedFolderId,
             isPublished: false,
             isPublic: false,
           });
@@ -301,8 +326,42 @@ export default function DriveManager({
         setBusy(false);
       }
     },
-    [createDocOnServer, flushSave, openDoc],
+    [createDocOnServer, flushSave, openDoc, selectedFolderId],
   );
+
+  const createFolderOnServer = useCallback(async (name: string) => {
+    const res = await fetch("/api/folders", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const data = (await res.json()) as { folder?: DriveFolder; error?: string };
+    if (!res.ok || !data.folder) {
+      throw new Error(data.error || `Create folder failed (${res.status})`);
+    }
+    return data.folder;
+  }, []);
+
+  const startNewFolder = useCallback(async () => {
+    const name = window.prompt("Folder name");
+    if (!name?.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const folder = await createFolderOnServer(name);
+      setFolders((prev) => {
+        const without = prev.filter((f) => f.id !== folder.id);
+        return [...without, folder].sort((a, b) =>
+          a.name.localeCompare(b.name),
+        );
+      });
+      setSelectedFolderId(folder.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Create folder failed");
+    } finally {
+      setBusy(false);
+    }
+  }, [createFolderOnServer]);
 
   const persistPatch = useCallback(
     async (patch: Partial<Form>) => {
@@ -473,13 +532,18 @@ export default function DriveManager({
       <DriveSidebar
         user={user}
         isAdmin={isAdmin}
-        docs={docs}
+        docs={visibleDocs}
+        allDocs={docs}
+        folders={folders}
+        selectedFolderId={selectedFolderId}
         selectedId={editingId}
         dragActive={dragActive}
         busy={busy}
+        onSelectFolder={setSelectedFolderId}
         onSelect={(doc) => void openDoc(doc)}
         onDelete={requestDelete}
         onNew={() => void startNew()}
+        onNewFolder={() => void startNewFolder()}
         onUploadFiles={(files) => void importFiles(files)}
         onDragEnter={onDragEnter}
         onDragOver={onDragOver}
@@ -495,6 +559,7 @@ export default function DriveManager({
         <DriveEditor
           editingId={editingId}
           form={form}
+          folders={folders}
           slug={selectedDoc?.slug}
           showPreview={showPreview}
           busy={busy}

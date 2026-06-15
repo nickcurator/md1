@@ -55,6 +55,7 @@ export async function executeMd1Tool(
       const summary = docs.map((d) => ({
         id: d.id,
         title: d.title,
+        folderId: d.folderId,
         slug: d.slug,
         isPublished: d.isPublished,
         updatedAt: d.updatedAt,
@@ -79,6 +80,7 @@ export async function executeMd1Tool(
                 id: doc.id,
                 title: doc.title,
                 slug: doc.slug,
+                folderId: doc.folderId,
                 description: doc.description,
                 isPublished: doc.isPublished,
                 isPublic: doc.isPublic,
@@ -107,6 +109,10 @@ export async function executeMd1Tool(
       const doc = await createDoc(user.id, {
         title,
         content,
+        folderId:
+          typeof a.folderId === "string" && a.folderId.trim()
+            ? a.folderId.trim()
+            : null,
         description:
           typeof a.description === "string" ? a.description : undefined,
         ...flags,
@@ -155,6 +161,9 @@ export async function executeMd1Tool(
       const doc = await updateDoc(user.id, id, {
         ...(typeof a.title === "string" ? { title: a.title } : {}),
         ...(typeof a.content === "string" ? { content: a.content } : {}),
+        ...(typeof a.folderId === "string"
+          ? { folderId: a.folderId.trim() || null }
+          : {}),
         ...(share
           ? { isPublished: true, isPublic: true }
           : typeof a.isPublished === "boolean"

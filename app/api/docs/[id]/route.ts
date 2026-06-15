@@ -20,6 +20,7 @@ type PatchBody = {
   title?: string;
   description?: string;
   content?: string;
+  folderId?: string | null;
   isPublished?: boolean;
   isPublic?: boolean;
   comments?: unknown;
@@ -64,6 +65,17 @@ export async function PATCH(
       { status: 400 },
     );
   }
+  const folderId =
+    body.folderId === undefined
+      ? undefined
+      : body.folderId === null
+        ? null
+        : typeof body.folderId === "string"
+          ? body.folderId.trim() || null
+          : undefined;
+  if (body.folderId !== undefined && folderId === undefined) {
+    return NextResponse.json({ error: "Invalid folderId" }, { status: 400 });
+  }
 
   try {
     const doc = await updateDoc(user.id, id, {
@@ -72,6 +84,7 @@ export async function PATCH(
         ? { description: body.description.trim() }
         : {}),
       ...(body.content !== undefined ? { content: body.content } : {}),
+      ...(folderId !== undefined ? { folderId } : {}),
       ...(body.isPublished !== undefined
         ? { isPublished: body.isPublished }
         : {}),
