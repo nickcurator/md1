@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 import type { DocComment } from "@/lib/shared-docs";
-import { commentIsAnchored, sortCommentsByPosition } from "./drive-comments";
+import { resolveCommentRange } from "./drive-comments";
 import type { MarkdownActionId } from "./drive-markdown-edit";
 import DriveSlashMenu from "./DriveSlashMenu";
 import {
@@ -37,25 +37,35 @@ function detectSlash(
 }
 
 function buildHighlightParts(content: string, comments: DocComment[]) {
-  const anchored = sortCommentsByPosition(comments).filter((c) =>
-    commentIsAnchored(content, c),
-  );
+  const resolved = comments
+    .map((comment) => ({ comment, range: resolveCommentRange(content, comment) }))
+    .filter(
+      (entry): entry is { comment: DocComment; range: { start: number; end: number } } =>
+        entry.range !== null,
+    )
+    .sort(
+      (a, b) =>
+        a.range.start - b.range.start ||
+        a.comment.createdAt.localeCompare(b.comment.createdAt),
+    );
+
   const parts: Array<
     | { type: "text"; text: string }
     | { type: "highlight"; text: string; commentId: string }
   > = [];
   let pos = 0;
 
-  for (const comment of anchored) {
-    if (comment.start > pos) {
-      parts.push({ type: "text", text: content.slice(pos, comment.start) });
+  for (const { comment, range } of resolved) {
+    if (range.start < pos) continue;
+    if (range.start > pos) {
+      parts.push({ type: "text", text: content.slice(pos, range.start) });
     }
     parts.push({
       type: "highlight",
-      text: content.slice(comment.start, comment.end),
+      text: content.slice(range.start, range.end),
       commentId: comment.id,
     });
-    pos = comment.end;
+    pos = range.end;
   }
 
   if (pos < content.length) {

@@ -4,8 +4,40 @@ export type CommentSegment =
   | { type: "markdown"; text: string }
   | { type: "highlight"; text: string; commentId: string };
 
+const MAX_QUOTE_OCCURRENCES = 200;
+
+/**
+ * Find a comment's current range in the content. The stored `start`/`end` are
+ * only a hint: we anchor primarily by the quoted text so comments survive edits
+ * elsewhere in the doc and the lossy Markdown round-trip of the block editor.
+ *
+ * 1. If the stored offsets still slice out the exact quote, keep them.
+ * 2. Otherwise locate the quote and pick the occurrence nearest the old start.
+ * 3. If the quote no longer appears at all, the comment is unanchored (null).
+ */
+export function resolveCommentRange(
+  content: string,
+  comment: DocComment,
+): { start: number; end: number } | null {
+  if (!comment.quote) return null;
+  if (content.slice(comment.start, comment.end) === comment.quote) {
+    return { start: comment.start, end: comment.end };
+  }
+
+  let best = -1;
+  let idx = content.indexOf(comment.quote);
+  for (let n = 0; idx !== -1 && n < MAX_QUOTE_OCCURRENCES; n += 1) {
+    if (best === -1 || Math.abs(idx - comment.start) < Math.abs(best - comment.start)) {
+      best = idx;
+    }
+    idx = content.indexOf(comment.quote, idx + 1);
+  }
+  if (best === -1) return null;
+  return { start: best, end: best + comment.quote.length };
+}
+
 export function commentIsAnchored(content: string, comment: DocComment): boolean {
-  return content.slice(comment.start, comment.end) === comment.quote;
+  return resolveCommentRange(content, comment) !== null;
 }
 
 export function sortCommentsByPosition(comments: DocComment[]): DocComment[] {
@@ -16,22 +48,33 @@ export function buildCommentSegments(
   content: string,
   comments: DocComment[],
 ): CommentSegment[] {
-  const anchored = sortCommentsByPosition(comments).filter((c) =>
-    commentIsAnchored(content, c),
-  );
+  const resolved = comments
+    .map((comment) => ({ comment, range: resolveCommentRange(content, comment) }))
+    .filter(
+      (entry): entry is { comment: DocComment; range: { start: number; end: number } } =>
+        entry.range !== null,
+    )
+    .sort(
+      (a, b) =>
+        a.range.start - b.range.start ||
+        a.comment.createdAt.localeCompare(b.comment.createdAt),
+    );
+
   const segments: CommentSegment[] = [];
   let pos = 0;
 
-  for (const comment of anchored) {
-    if (comment.start > pos) {
-      segments.push({ type: "markdown", text: content.slice(pos, comment.start) });
+  for (const { comment, range } of resolved) {
+    // Skip overlaps — keep the segment stream non-overlapping and in order.
+    if (range.start < pos) continue;
+    if (range.start > pos) {
+      segments.push({ type: "markdown", text: content.slice(pos, range.start) });
     }
     segments.push({
       type: "highlight",
-      text: comment.quote,
+      text: content.slice(range.start, range.end),
       commentId: comment.id,
     });
-    pos = comment.end;
+    pos = range.end;
   }
 
   if (pos < content.length) {
@@ -55,6 +98,30 @@ export function createDocComment(
     quote,
     start,
     end,
+    text: body,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Create a comment from a quote string (block editor: the selection text is
+ * known, but not a reliable Markdown offset). The stored offset is a best-effort
+ * hint — resolveCommentRange re-locates by quote on render.
+ */
+export function createDocCommentFromQuote(
+  content: string,
+  quote: string,
+  text: string,
+): DocComment | null {
+  const trimmedQuote = quote.trim();
+  const body = text.trim();
+  if (!trimmedQuote || !body) return null;
+  const start = Math.max(0, content.indexOf(quote));
+  return {
+    id: crypto.randomUUID(),
+    quote,
+    start,
+    end: start + quote.length,
     text: body,
     createdAt: new Date().toISOString(),
   };
