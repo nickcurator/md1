@@ -9,18 +9,23 @@ import {
   ListOrdered,
   Minus,
   Quote,
+  Table,
   type LucideIcon,
 } from "lucide-react";
 import type { MarkdownActionId } from "./drive-markdown-edit";
 
 // A "/" command. `kind: "action"` reuses an existing markdown edit; `kind:
 // "image"` triggers the upload picker — so the slash menu is just a faster
-// surface over the Stage 1 plumbing, no new editing logic.
+// surface over the existing editor plumbing, no new editing logic.
+// `group` drives the section headers; `badge` shows the markdown shorthand
+// (Notion-style) on the right.
 export type SlashCommand = {
   id: string;
   label: string;
   icon: LucideIcon;
   keywords: string[];
+  group: string;
+  badge?: string;
 } & ({ kind: "action"; action: MarkdownActionId } | { kind: "image" });
 
 export const SLASH_COMMANDS: SlashCommand[] = [
@@ -29,6 +34,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: "Heading 1",
     icon: Heading1,
     keywords: ["h1", "heading", "title"],
+    group: "Headings",
+    badge: "#",
     kind: "action",
     action: "h1",
   },
@@ -37,6 +44,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: "Heading 2",
     icon: Heading2,
     keywords: ["h2", "heading", "subtitle"],
+    group: "Headings",
+    badge: "##",
     kind: "action",
     action: "h2",
   },
@@ -45,6 +54,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: "Heading 3",
     icon: Heading3,
     keywords: ["h3", "heading"],
+    group: "Headings",
+    badge: "###",
     kind: "action",
     action: "h3",
   },
@@ -53,6 +64,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: "Checklist",
     icon: ListChecks,
     keywords: ["todo", "task", "checklist", "check", "checkbox"],
+    group: "Basic blocks",
+    badge: "[ ]",
     kind: "action",
     action: "task",
   },
@@ -61,6 +74,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: "Bulleted list",
     icon: List,
     keywords: ["bullet", "list", "unordered"],
+    group: "Basic blocks",
+    badge: "-",
     kind: "action",
     action: "ul",
   },
@@ -69,6 +84,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: "Numbered list",
     icon: ListOrdered,
     keywords: ["number", "numbered", "ordered", "list"],
+    group: "Basic blocks",
+    badge: "1.",
     kind: "action",
     action: "ol",
   },
@@ -77,6 +94,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: "Quote",
     icon: Quote,
     keywords: ["quote", "blockquote", "citation"],
+    group: "Basic blocks",
+    badge: ">",
     kind: "action",
     action: "quote",
   },
@@ -85,14 +104,27 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: "Code block",
     icon: Code2,
     keywords: ["code", "snippet", "block"],
+    group: "Basic blocks",
+    badge: "```",
     kind: "action",
     action: "codeBlock",
+  },
+  {
+    id: "table",
+    label: "Table",
+    icon: Table,
+    keywords: ["table", "grid", "rows", "columns"],
+    group: "Basic blocks",
+    kind: "action",
+    action: "table",
   },
   {
     id: "hr",
     label: "Divider",
     icon: Minus,
     keywords: ["divider", "rule", "separator", "line", "hr"],
+    group: "Basic blocks",
+    badge: "---",
     kind: "action",
     action: "hr",
   },
@@ -101,6 +133,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: "Image",
     icon: ImageIcon,
     keywords: ["image", "img", "picture", "photo", "media", "upload"],
+    group: "Media",
     kind: "image",
   },
 ];

@@ -102,27 +102,3 @@ export function createDocComment(
     createdAt: new Date().toISOString(),
   };
 }
-
-/**
- * Create a comment from a quote string (block editor: the selection text is
- * known, but not a reliable Markdown offset). The stored offset is a best-effort
- * hint — resolveCommentRange re-locates by quote on render.
- */
-export function createDocCommentFromQuote(
-  content: string,
-  quote: string,
-  text: string,
-): DocComment | null {
-  const trimmedQuote = quote.trim();
-  const body = text.trim();
-  if (!trimmedQuote || !body) return null;
-  const start = Math.max(0, content.indexOf(quote));
-  return {
-    id: crypto.randomUUID(),
-    quote,
-    start,
-    end: start + quote.length,
-    text: body,
-    createdAt: new Date().toISOString(),
-  };
-}

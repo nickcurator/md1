@@ -12,7 +12,8 @@ export type MarkdownActionId =
   | "task"
   | "quote"
   | "codeBlock"
-  | "hr";
+  | "hr"
+  | "table";
 
 type EditResult = {
   value: string;
@@ -232,6 +233,22 @@ function horizontalRule(value: string, start: number, end: number): EditResult {
   };
 }
 
+function table(value: string, start: number, end: number): EditResult {
+  const { start: lineStart } = lineBounds(value, start);
+  const atLineStart = start === end && lineStart === start;
+  const block = "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |";
+  const prefix = atLineStart ? "" : "\n\n";
+  const insert = `${prefix}${block}\n`;
+  const next = value.slice(0, start) + insert + value.slice(end);
+  // Select the first header cell so the user can type over the placeholder.
+  const cellStart = start + prefix.length + 2; // skip leading "| "
+  return {
+    value: next,
+    selectionStart: cellStart,
+    selectionEnd: cellStart + "Column 1".length,
+  };
+}
+
 export function applyMarkdownEdit(
   value: string,
   selectionStart: number,
@@ -270,6 +287,8 @@ export function applyMarkdownEdit(
       return codeBlock(value, start, end);
     case "hr":
       return horizontalRule(value, start, end);
+    case "table":
+      return table(value, start, end);
     default:
       return { value, selectionStart: start, selectionEnd: end };
   }

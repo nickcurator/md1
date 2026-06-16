@@ -12,9 +12,6 @@
     "import:fable": "node scripts/import-fable-notes.mjs"
   },
   "dependencies": {
-    "@blocknote/ariakit": "^0.51.4",
-    "@blocknote/core": "^0.51.4",
-    "@blocknote/react": "^0.51.4",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.105.4",

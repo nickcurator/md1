@@ -1,14 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import dynamic from "next/dynamic";
 import {
   Check,
   Copy,
   ExternalLink,
   Eye,
   Folder,
-  LayoutGrid,
   Pencil,
   Trash2,
 } from "lucide-react";
@@ -18,8 +16,7 @@ import DriveCommentMargin from "./DriveCommentMargin";
 import DriveCommentMarkdown from "./DriveCommentMarkdown";
 import DriveMarkdownToolbar from "./DriveMarkdownToolbar";
 import DriveSelectionCommentButton from "./DriveSelectionCommentButton";
-import { createDocComment, createDocCommentFromQuote } from "./drive-comments";
-import DriveBlockComments from "./DriveBlockComments";
+import { createDocComment } from "./drive-comments";
 import {
   applyMarkdownEdit,
   isNativeEditorShortcut,
@@ -29,11 +26,6 @@ import {
 } from "./drive-markdown-edit";
 import { imageFilesFrom, imageMarkdown, uploadMedia } from "./drive-media";
 import type { DriveEditorLiveReaders } from "./drive-editor-live";
-
-// BlockNote touches the DOM on init, so load the block editor client-only.
-const DriveBlockEditor = dynamic(() => import("./DriveBlockEditor"), {
-  ssr: false,
-});
 
 function getSelectionTopInContainer(
   textarea: HTMLTextAreaElement,
@@ -135,8 +127,6 @@ export default function DriveEditor({
   );
   const [commentOffsetTop, setCommentOffsetTop] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
-  const [blockMode, setBlockMode] = useState(false);
-  const [blockQuote, setBlockQuote] = useState("");
   const canShare = form.isPublished && !!editingId && !!slug;
 
   useLayoutEffect(() => {
@@ -211,14 +201,6 @@ export default function DriveEditor({
       const end = textareaRef.current.selectionEnd;
       textareaRef.current.setSelectionRange(end, end);
     }
-  }
-
-  function addBlockComment(text: string) {
-    const comment = createDocCommentFromQuote(form.content, blockQuote, text);
-    if (!comment) return;
-    onFormChange({ comments: [...form.comments, comment] });
-    setActiveCommentId(comment.id);
-    setBlockQuote("");
   }
 
   function updateComment(id: string, text: string) {
@@ -425,27 +407,13 @@ export default function DriveEditor({
       )}
 
       <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--bg)] py-2.5 pl-4 pr-14">
-        {!blockMode && (
-          <button
-            type="button"
-            onClick={onTogglePreview}
-            className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)]"
-          >
-            {showPreview ? <Pencil size={15} /> : <Eye size={15} />}
-            {showPreview ? "Edit" : "Preview"}
-          </button>
-        )}
-
         <button
           type="button"
-          onClick={() => setBlockMode((v) => !v)}
-          title="Block editor (beta)"
-          className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm hover:bg-[var(--card)] hover:text-[var(--fg)] ${
-            blockMode ? "text-[var(--fg)]" : "text-[var(--muted)]"
-          }`}
+          onClick={onTogglePreview}
+          className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)]"
         >
-          <LayoutGrid size={15} />
-          {blockMode ? "Exit blocks" : "Blocks (beta)"}
+          {showPreview ? <Pencil size={15} /> : <Eye size={15} />}
+          {showPreview ? "Edit" : "Preview"}
         </button>
 
         <label
@@ -579,7 +547,7 @@ export default function DriveEditor({
               </p>
             )}
 
-            {!showPreview && !blockMode && (
+            {!showPreview && (
               <DriveMarkdownToolbar
                 onAction={applyFormat}
                 onInsertImage={handlePickImage}
@@ -601,14 +569,7 @@ export default function DriveEditor({
               ref={contentAreaRef}
               className="relative flex flex-col"
             >
-              {blockMode ? (
-                <DriveBlockEditor
-                  key={`block-${editingId}`}
-                  content={form.content}
-                  onChange={(content) => onFormChange({ content })}
-                  onSelectionText={setBlockQuote}
-                />
-              ) : showPreview ? (
+              {showPreview ? (
                 <DriveCommentMarkdown
                   content={form.content}
                   comments={form.comments}
@@ -637,7 +598,7 @@ export default function DriveEditor({
                 />
               )}
 
-              {!showPreview && !blockMode && selection && !composing && (
+              {!showPreview && selection && !composing && (
                 <DriveSelectionCommentButton
                   top={selectionTop}
                   onClick={() => setComposing(true)}
@@ -646,7 +607,7 @@ export default function DriveEditor({
             </div>
           </div>
 
-          {showCommentMargin && !blockMode && (
+          {showCommentMargin && (
             <div className="relative hidden min-h-0 self-stretch lg:block">
               <DriveCommentMargin
                 content={form.content}
@@ -662,22 +623,6 @@ export default function DriveEditor({
                 onCancelCompose={() => {
                   setComposing(false);
                 }}
-                onUpdateComment={updateComment}
-                onDeleteComment={deleteComment}
-              />
-            </div>
-          )}
-
-          {blockMode && (
-            <div className="hidden min-h-0 self-stretch lg:block">
-              <DriveBlockComments
-                content={form.content}
-                comments={form.comments}
-                activeCommentId={activeCommentId}
-                pendingQuote={blockQuote}
-                onActiveCommentChange={focusComment}
-                onSubmit={addBlockComment}
-                onClearPending={() => setBlockQuote("")}
                 onUpdateComment={updateComment}
                 onDeleteComment={deleteComment}
               />
