@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import {
   Check,
   Copy,
   ExternalLink,
   Eye,
   Folder,
+  LayoutGrid,
   Pencil,
   Trash2,
 } from "lucide-react";
@@ -26,6 +28,11 @@ import {
 } from "./drive-markdown-edit";
 import { imageFilesFrom, imageMarkdown, uploadMedia } from "./drive-media";
 import type { DriveEditorLiveReaders } from "./drive-editor-live";
+
+// BlockNote touches the DOM on init, so load the block editor client-only.
+const DriveBlockEditor = dynamic(() => import("./DriveBlockEditor"), {
+  ssr: false,
+});
 
 function getSelectionTopInContainer(
   textarea: HTMLTextAreaElement,
@@ -127,6 +134,7 @@ export default function DriveEditor({
   );
   const [commentOffsetTop, setCommentOffsetTop] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  const [blockMode, setBlockMode] = useState(false);
   const canShare = form.isPublished && !!editingId && !!slug;
 
   useLayoutEffect(() => {
@@ -407,13 +415,27 @@ export default function DriveEditor({
       )}
 
       <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--bg)] py-2.5 pl-4 pr-14">
+        {!blockMode && (
+          <button
+            type="button"
+            onClick={onTogglePreview}
+            className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)]"
+          >
+            {showPreview ? <Pencil size={15} /> : <Eye size={15} />}
+            {showPreview ? "Edit" : "Preview"}
+          </button>
+        )}
+
         <button
           type="button"
-          onClick={onTogglePreview}
-          className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)]"
+          onClick={() => setBlockMode((v) => !v)}
+          title="Block editor (beta)"
+          className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm hover:bg-[var(--card)] hover:text-[var(--fg)] ${
+            blockMode ? "text-[var(--fg)]" : "text-[var(--muted)]"
+          }`}
         >
-          {showPreview ? <Pencil size={15} /> : <Eye size={15} />}
-          {showPreview ? "Edit" : "Preview"}
+          <LayoutGrid size={15} />
+          {blockMode ? "Exit blocks" : "Blocks (beta)"}
         </button>
 
         <label
@@ -547,7 +569,7 @@ export default function DriveEditor({
               </p>
             )}
 
-            {!showPreview && (
+            {!showPreview && !blockMode && (
               <DriveMarkdownToolbar
                 onAction={applyFormat}
                 onInsertImage={handlePickImage}
@@ -569,7 +591,13 @@ export default function DriveEditor({
               ref={contentAreaRef}
               className="relative flex flex-col"
             >
-              {showPreview ? (
+              {blockMode ? (
+                <DriveBlockEditor
+                  key={`block-${editingId}`}
+                  content={form.content}
+                  onChange={(content) => onFormChange({ content })}
+                />
+              ) : showPreview ? (
                 <DriveCommentMarkdown
                   content={form.content}
                   comments={form.comments}
@@ -598,7 +626,7 @@ export default function DriveEditor({
                 />
               )}
 
-              {!showPreview && selection && !composing && (
+              {!showPreview && !blockMode && selection && !composing && (
                 <DriveSelectionCommentButton
                   top={selectionTop}
                   onClick={() => setComposing(true)}
@@ -607,7 +635,7 @@ export default function DriveEditor({
             </div>
           </div>
 
-          {showCommentMargin && (
+          {showCommentMargin && !blockMode && (
             <div className="relative hidden min-h-0 self-stretch lg:block">
               <DriveCommentMargin
                 content={form.content}
