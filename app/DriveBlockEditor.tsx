@@ -4,8 +4,14 @@ import "@blocknote/core/fonts/inter.css";
 import "@blocknote/ariakit/style.css";
 
 import { useEffect, useRef, useState } from "react";
+import { filterSuggestionItems } from "@blocknote/core/extensions";
 import { BlockNoteView } from "@blocknote/ariakit";
-import { useCreateBlockNote } from "@blocknote/react";
+import {
+  getDefaultReactSlashMenuItems,
+  SuggestionMenuController,
+  useCreateBlockNote,
+} from "@blocknote/react";
+import DriveBlockSlashMenu from "./DriveBlockSlashMenu";
 import { uploadMedia } from "./drive-media";
 
 // Stage 3 (beta): a Notion-style block editor on BlockNote. The document is
@@ -75,11 +81,20 @@ export default function DriveBlockEditor({
       <BlockNoteView
         editor={editor}
         theme={dark ? "dark" : "light"}
+        slashMenu={false}
         onChange={() => {
           if (!ready.current) return;
           onChange(editor.blocksToMarkdownLossy());
         }}
-      />
+      >
+        <SuggestionMenuController
+          triggerCharacter="/"
+          suggestionMenuComponent={DriveBlockSlashMenu}
+          getItems={async (query) =>
+            filterSuggestionItems(getDefaultReactSlashMenuItems(editor), query)
+          }
+        />
+      </BlockNoteView>
     </div>
   );
 }
