@@ -24,15 +24,29 @@ function prefersDark(): boolean {
 export default function DriveBlockEditor({
   content,
   onChange,
+  onSelectionText,
 }: {
   content: string;
   onChange: (markdown: string) => void;
+  onSelectionText?: (text: string) => void;
 }) {
   const editor = useCreateBlockNote({
     uploadFile: async (file: File) => (await uploadMedia(file)).url,
   });
   const ready = useRef(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const [dark, setDark] = useState(prefersDark);
+
+  // Report the current text selection (for commenting) when it lands inside the
+  // editor. BlockNote uses ProseMirror positions, not Markdown offsets, so we
+  // capture the selected string and let the comment layer re-anchor by quote.
+  const reportSelection = () => {
+    if (!onSelectionText) return;
+    const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    const text = sel?.toString() ?? "";
+    const inside = !!sel?.anchorNode && !!wrapperRef.current?.contains(sel.anchorNode);
+    onSelectionText(inside ? text.trim() : "");
+  };
 
   // Parse the stored Markdown into blocks once, then allow change tracking.
   useEffect(() => {
@@ -57,13 +71,15 @@ export default function DriveBlockEditor({
   }, []);
 
   return (
-    <BlockNoteView
-      editor={editor}
-      theme={dark ? "dark" : "light"}
-      onChange={() => {
-        if (!ready.current) return;
-        onChange(editor.blocksToMarkdownLossy());
-      }}
-    />
+    <div ref={wrapperRef} onMouseUp={reportSelection} onKeyUp={reportSelection}>
+      <BlockNoteView
+        editor={editor}
+        theme={dark ? "dark" : "light"}
+        onChange={() => {
+          if (!ready.current) return;
+          onChange(editor.blocksToMarkdownLossy());
+        }}
+      />
+    </div>
   );
 }

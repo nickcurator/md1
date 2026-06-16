@@ -18,7 +18,8 @@ import DriveCommentMargin from "./DriveCommentMargin";
 import DriveCommentMarkdown from "./DriveCommentMarkdown";
 import DriveMarkdownToolbar from "./DriveMarkdownToolbar";
 import DriveSelectionCommentButton from "./DriveSelectionCommentButton";
-import { createDocComment } from "./drive-comments";
+import { createDocComment, createDocCommentFromQuote } from "./drive-comments";
+import DriveBlockComments from "./DriveBlockComments";
 import {
   applyMarkdownEdit,
   isNativeEditorShortcut,
@@ -135,6 +136,7 @@ export default function DriveEditor({
   const [commentOffsetTop, setCommentOffsetTop] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [blockMode, setBlockMode] = useState(false);
+  const [blockQuote, setBlockQuote] = useState("");
   const canShare = form.isPublished && !!editingId && !!slug;
 
   useLayoutEffect(() => {
@@ -209,6 +211,14 @@ export default function DriveEditor({
       const end = textareaRef.current.selectionEnd;
       textareaRef.current.setSelectionRange(end, end);
     }
+  }
+
+  function addBlockComment(text: string) {
+    const comment = createDocCommentFromQuote(form.content, blockQuote, text);
+    if (!comment) return;
+    onFormChange({ comments: [...form.comments, comment] });
+    setActiveCommentId(comment.id);
+    setBlockQuote("");
   }
 
   function updateComment(id: string, text: string) {
@@ -596,6 +606,7 @@ export default function DriveEditor({
                   key={`block-${editingId}`}
                   content={form.content}
                   onChange={(content) => onFormChange({ content })}
+                  onSelectionText={setBlockQuote}
                 />
               ) : showPreview ? (
                 <DriveCommentMarkdown
@@ -651,6 +662,22 @@ export default function DriveEditor({
                 onCancelCompose={() => {
                   setComposing(false);
                 }}
+                onUpdateComment={updateComment}
+                onDeleteComment={deleteComment}
+              />
+            </div>
+          )}
+
+          {blockMode && (
+            <div className="hidden min-h-0 self-stretch lg:block">
+              <DriveBlockComments
+                content={form.content}
+                comments={form.comments}
+                activeCommentId={activeCommentId}
+                pendingQuote={blockQuote}
+                onActiveCommentChange={focusComment}
+                onSubmit={addBlockComment}
+                onClearPending={() => setBlockQuote("")}
                 onUpdateComment={updateComment}
                 onDeleteComment={deleteComment}
               />
