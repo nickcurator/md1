@@ -591,6 +591,8 @@ export default function DriveEditor({
                   onPaste={handlePaste}
                   onDrop={handleEditorDrop}
                   onDragOver={handleEditorDragOver}
+                  onApplyAction={applyFormat}
+                  onInsertImage={handlePickImage}
                   onAnchorPositions={handleAnchorPositions}
                   placeholder="Start writing…"
                 />

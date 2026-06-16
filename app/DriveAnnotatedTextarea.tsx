@@ -10,8 +10,31 @@ import {
 } from "react";
 import type { DocComment } from "@/lib/shared-docs";
 import { commentIsAnchored, sortCommentsByPosition } from "./drive-comments";
+import type { MarkdownActionId } from "./drive-markdown-edit";
+import DriveSlashMenu from "./DriveSlashMenu";
+import {
+  filterSlashCommands,
+  type SlashCommand,
+} from "./drive-slash-commands";
+import { getCaretCoords } from "./textarea-caret";
 
 const MIN_HEIGHT_CLASS = "min-h-[calc(100dvh-14rem)]";
+
+// A "/" command is active when the caret sits right after a `/token` that began
+// at line start or after whitespace, with no spaces in the token yet. Returns
+// the position of the `/` and the query typed so far, or null.
+function detectSlash(
+  value: string,
+  caret: number | null,
+): { start: number; query: string } | null {
+  if (caret == null) return null;
+  const lineStart = value.lastIndexOf("\n", caret - 1) + 1;
+  const before = value.slice(lineStart, caret);
+  const match = /(^|\s)\/(\S*)$/.exec(before);
+  if (!match) return null;
+  const query = match[2];
+  return { start: caret - query.length - 1, query };
+}
 
 function buildHighlightParts(content: string, comments: DocComment[]) {
   const anchored = sortCommentsByPosition(comments).filter((c) =>
@@ -60,6 +83,8 @@ export default function DriveAnnotatedTextarea({
   onPaste,
   onDrop,
   onDragOver,
+  onApplyAction,
+  onInsertImage,
   onAnchorPositions,
   placeholder,
 }: {
@@ -74,6 +99,8 @@ export default function DriveAnnotatedTextarea({
   onPaste?: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void;
   onDrop?: (e: React.DragEvent<HTMLDivElement>) => void;
   onDragOver?: (e: React.DragEvent<HTMLDivElement>) => void;
+  onApplyAction?: (action: MarkdownActionId) => void;
+  onInsertImage?: () => void;
   onAnchorPositions: (positions: Record<string, number>) => void;
   placeholder: string;
 }) {
@@ -87,6 +114,20 @@ export default function DriveAnnotatedTextarea({
     () => buildHighlightParts(displayContent, comments),
     [displayContent, comments],
   );
+
+  const [slash, setSlash] = useState<{ start: number; query: string } | null>(
+    null,
+  );
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
+  const slashCommands = useMemo(
+    () => (slash ? filterSlashCommands(slash.query) : []),
+    [slash],
+  );
+  // Reset the highlighted item whenever the query changes.
+  useEffect(() => {
+    setSlashIndex(0);
+  }, [slash?.query]);
 
   const assignRef = useCallback(
     (el: HTMLTextAreaElement | null) => {
@@ -157,9 +198,75 @@ export default function DriveAnnotatedTextarea({
     return () => window.removeEventListener("resize", onResize);
   }, [syncScroll, measureAnchors]);
 
+  // Recompute the "/" command state (and the menu's caret anchor) from the
+  // live textarea. Called after input, caret moves and key-ups.
+  const refreshSlash = useCallback((ta: HTMLTextAreaElement) => {
+    const detected = detectSlash(ta.value, ta.selectionStart);
+    if (!detected) {
+      setSlash(null);
+      return;
+    }
+    const coords = getCaretCoords(ta, ta.selectionStart);
+    setMenuPos({
+      top: coords.top - ta.scrollTop + coords.height + 4,
+      left: Math.max(0, coords.left - ta.scrollLeft),
+    });
+    setSlash(detected);
+  }, []);
+
+  const selectSlashCommand = useCallback(
+    (cmd: SlashCommand) => {
+      const ta = localRef.current;
+      if (!ta || !slash) return;
+      const caret = ta.selectionStart;
+      // Strip the typed "/query" before applying the command.
+      const next = ta.value.slice(0, slash.start) + ta.value.slice(caret);
+      ta.value = next;
+      publishContent(next);
+      ta.setSelectionRange(slash.start, slash.start);
+      ta.focus();
+      setSlash(null);
+      if (cmd.kind === "image") onInsertImage?.();
+      else onApplyAction?.(cmd.action);
+    },
+    [slash, publishContent, onApplyAction, onInsertImage],
+  );
+
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (slash && slashCommands.length > 0) {
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          setSlashIndex((i) => (i + 1) % slashCommands.length);
+          return;
+        }
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          setSlashIndex(
+            (i) => (i - 1 + slashCommands.length) % slashCommands.length,
+          );
+          return;
+        }
+        if (event.key === "Enter" || event.key === "Tab") {
+          event.preventDefault();
+          selectSlashCommand(slashCommands[slashIndex] ?? slashCommands[0]);
+          return;
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          setSlash(null);
+          return;
+        }
+      }
+      onKeyDown?.(event);
+    },
+    [slash, slashCommands, slashIndex, selectSlashCommand, onKeyDown],
+  );
+
   const handleKeyUp = useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
       onSelect();
+      refreshSlash(event.currentTarget);
       if (!isHistoryEditKey(event)) return;
       requestAnimationFrame(() => {
         const ta = localRef.current;
@@ -167,7 +274,7 @@ export default function DriveAnnotatedTextarea({
         publishContent(ta.value);
       });
     },
-    [onSelect, publishContent],
+    [onSelect, refreshSlash, publishContent],
   );
 
   return (
@@ -211,20 +318,38 @@ export default function DriveAnnotatedTextarea({
         key={documentKey}
         ref={assignRef}
         defaultValue={value}
-        onInput={(e) => publishContent(e.currentTarget.value)}
-        onSelect={onSelect}
-        onKeyDown={onKeyDown}
+        onInput={(e) => {
+          publishContent(e.currentTarget.value);
+          refreshSlash(e.currentTarget);
+        }}
+        onSelect={(e) => {
+          onSelect();
+          refreshSlash(e.currentTarget);
+        }}
+        onKeyDown={handleKeyDown}
         onKeyUp={handleKeyUp}
         onPaste={onPaste}
+        onBlur={() => setSlash(null)}
         onMouseUp={onSelect}
         onScroll={() => {
           syncScroll();
           measureAnchors();
+          setSlash(null);
         }}
         spellCheck={false}
         placeholder={placeholder}
         className={`no-scrollbar relative z-10 ${MIN_HEIGHT_CLASS} w-full resize-none overflow-y-auto border-none bg-transparent font-mono text-[15px] leading-8 text-transparent caret-[var(--fg)] outline-none placeholder:text-transparent selection:bg-amber-300/40`}
       />
+
+      {slash && slashCommands.length > 0 && (
+        <DriveSlashMenu
+          commands={slashCommands}
+          activeIndex={slashIndex}
+          position={menuPos}
+          onSelect={selectSlashCommand}
+          onHover={setSlashIndex}
+        />
+      )}
     </div>
   );
 }
