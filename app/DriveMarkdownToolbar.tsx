@@ -7,9 +7,11 @@ import {
   Heading1,
   Heading2,
   Heading3,
+  Image as ImageIcon,
   Italic,
   Link,
   List,
+  ListChecks,
   ListOrdered,
   Minus,
   Quote,
@@ -46,8 +48,10 @@ function Divider() {
 
 export default function DriveMarkdownToolbar({
   onAction,
+  onInsertImage,
 }: {
   onAction: (action: MarkdownActionId) => void;
+  onInsertImage: () => void;
 }) {
   return (
     <div className="mb-4 flex flex-wrap items-center gap-0.5 border-b border-[var(--border)] pb-3">
@@ -118,6 +122,12 @@ export default function DriveMarkdownToolbar({
         <ListOrdered size={16} />
       </ToolButton>
       <ToolButton
+        label={`Checklist (${markdownShortcutHint("modShift", "0")})`}
+        onClick={() => onAction("task")}
+      >
+        <ListChecks size={16} />
+      </ToolButton>
+      <ToolButton
         label={`Quote (${markdownShortcutHint("modShift", "9")})`}
         onClick={() => onAction("quote")}
       >
@@ -134,6 +144,12 @@ export default function DriveMarkdownToolbar({
         onClick={() => onAction("hr")}
       >
         <Minus size={16} />
+      </ToolButton>
+
+      <Divider />
+
+      <ToolButton label="Insert image" onClick={onInsertImage}>
+        <ImageIcon size={16} />
       </ToolButton>
     </div>
   );

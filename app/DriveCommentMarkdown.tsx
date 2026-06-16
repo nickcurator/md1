@@ -1,12 +1,13 @@
 "use client";
 
 import { useLayoutEffect, useRef } from "react";
+import type { Components } from "react-markdown";
 import Markdown from "@/components/Markdown";
 import type { DocComment } from "@/lib/shared-docs";
 import { buildCommentSegments } from "./drive-comments";
 
 const proseClass =
-  "prose prose-neutral dark:prose-invert max-w-none prose-headings:font-semibold prose-pre:bg-[var(--bg)] prose-pre:text-[var(--fg)]";
+  "prose prose-neutral dark:prose-invert max-w-none prose-headings:font-semibold prose-pre:bg-[var(--bg)] prose-pre:text-[var(--fg)] prose-img:rounded-lg prose-img:border prose-img:border-[var(--border)]";
 
 export default function DriveCommentMarkdown({
   content,
@@ -14,15 +15,40 @@ export default function DriveCommentMarkdown({
   activeCommentId,
   onCommentClick,
   onAnchorPositions,
+  onToggleTask,
 }: {
   content: string;
   comments: DocComment[];
   activeCommentId: string | null;
   onCommentClick: (id: string) => void;
   onAnchorPositions: (positions: Record<string, number>) => void;
+  onToggleTask?: (index: number) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const segments = buildCommentSegments(content, comments);
+
+  // Wire GFM task-list checkboxes to be clickable. A fresh counter is created
+  // on every render; react-markdown invokes `input` in document order, so the
+  // Nth checkbox maps to the Nth task marker in the source (see
+  // toggleTaskByIndex). Only used in the comment-free branch below — when a doc
+  // has comments the body is split into inline fragments where task lists can't
+  // render coherently anyway.
+  const taskCounter = { n: 0 };
+  const taskComponents: Components = {
+    input(props) {
+      // GFM only emits checkbox inputs (task-list markers); ignore anything else.
+      if (props.type !== "checkbox") return null;
+      const index = taskCounter.n++;
+      return (
+        <input
+          type="checkbox"
+          checked={Boolean(props.checked)}
+          onChange={() => onToggleTask?.(index)}
+          className="cursor-pointer"
+        />
+      );
+    },
+  };
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -41,7 +67,11 @@ export default function DriveCommentMarkdown({
   if (segments.length === 0) {
     return (
       <div ref={containerRef}>
-        <Markdown content={content} className={proseClass} />
+        <Markdown
+          content={content}
+          className={proseClass}
+          components={taskComponents}
+        />
       </div>
     );
   }

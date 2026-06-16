@@ -21,8 +21,10 @@ import {
   applyMarkdownEdit,
   isNativeEditorShortcut,
   markdownShortcutAction,
+  toggleTaskByIndex,
   type MarkdownActionId,
 } from "./drive-markdown-edit";
+import { imageFilesFrom, imageMarkdown, uploadMedia } from "./drive-media";
 import type { DriveEditorLiveReaders } from "./drive-editor-live";
 
 function getSelectionTopInContainer(
@@ -103,6 +105,7 @@ export default function DriveEditor({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const contentAreaRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     onRegisterLiveReaders({
@@ -123,6 +126,7 @@ export default function DriveEditor({
     {},
   );
   const [commentOffsetTop, setCommentOffsetTop] = useState(0);
+  const [mediaError, setMediaError] = useState<string | null>(null);
   const canShare = form.isPublished && !!editingId && !!slug;
 
   useLayoutEffect(() => {
@@ -234,6 +238,114 @@ export default function DriveEditor({
       });
     },
     [onFormChange, showPreview, updateSelectionUi],
+  );
+
+  const handleToggleTask = useCallback(
+    (index: number) => {
+      onFormChange({ content: toggleTaskByIndex(form.content, index) });
+    },
+    [form.content, onFormChange],
+  );
+
+  // Insert text at the caret in the (uncontrolled) textarea, mirroring how
+  // applyFormat writes back to both the element and React state.
+  const insertAtCursor = useCallback(
+    (text: string) => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const next = ta.value.slice(0, start) + text + ta.value.slice(end);
+      ta.value = next;
+      onFormChange({ content: next });
+      const pos = start + text.length;
+      requestAnimationFrame(() => {
+        ta.focus();
+        ta.setSelectionRange(pos, pos);
+      });
+    },
+    [onFormChange],
+  );
+
+  const replaceInTextarea = useCallback(
+    (token: string, replacement: string) => {
+      const ta = textareaRef.current;
+      if (!ta || !ta.value.includes(token)) return;
+      const next = ta.value.replace(token, replacement);
+      ta.value = next;
+      onFormChange({ content: next });
+    },
+    [onFormChange],
+  );
+
+  // Drop a placeholder in immediately, then swap it for the real `![](url)`
+  // once the upload resolves (or remove it on failure).
+  const uploadAndInsert = useCallback(
+    async (file: File) => {
+      const placeholder = `![Uploading ${file.name}…](uploading:${crypto.randomUUID()})`;
+      insertAtCursor(placeholder + "\n");
+      try {
+        const { url, name } = await uploadMedia(file);
+        replaceInTextarea(placeholder, imageMarkdown(name, url));
+      } catch (err) {
+        replaceInTextarea(placeholder + "\n", "");
+        setMediaError(err instanceof Error ? err.message : "Upload failed");
+      }
+    },
+    [insertAtCursor, replaceInTextarea],
+  );
+
+  const handlePaste = useCallback(
+    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const images = imageFilesFrom(event.clipboardData?.files);
+      if (images.length === 0) return;
+      event.preventDefault();
+      setMediaError(null);
+      for (const file of images) void uploadAndInsert(file);
+    },
+    [uploadAndInsert],
+  );
+
+  // Image drops are handled here and stop propagating so the Drive-level
+  // markdown importer (which creates new docs) doesn't also fire. Non-image
+  // drops (.md/.txt) fall through to bubble up to DriveManager.
+  const handleEditorDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      const images = imageFilesFrom(event.dataTransfer?.files);
+      if (images.length === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setMediaError(null);
+      for (const file of images) void uploadAndInsert(file);
+    },
+    [uploadAndInsert],
+  );
+
+  const handleEditorDragOver = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      const hasImage = Array.from(event.dataTransfer?.items ?? []).some(
+        (item) => item.kind === "file" && item.type.startsWith("image/"),
+      );
+      if (!hasImage) return;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    [],
+  );
+
+  const handlePickImage = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileInputChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const images = imageFilesFrom(event.target.files);
+      event.target.value = "";
+      if (images.length === 0) return;
+      setMediaError(null);
+      for (const file of images) void uploadAndInsert(file);
+    },
+    [uploadAndInsert],
   );
 
   const handleMarkdownKeyDown = useCallback(
@@ -436,7 +548,21 @@ export default function DriveEditor({
             )}
 
             {!showPreview && (
-              <DriveMarkdownToolbar onAction={applyFormat} />
+              <DriveMarkdownToolbar
+                onAction={applyFormat}
+                onInsertImage={handlePickImage}
+              />
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              multiple
+              hidden
+              onChange={handleFileInputChange}
+            />
+            {mediaError && (
+              <p className="mb-3 text-sm text-red-500">{mediaError}</p>
             )}
 
             <div
@@ -450,6 +576,7 @@ export default function DriveEditor({
                   activeCommentId={activeCommentId}
                   onCommentClick={focusComment}
                   onAnchorPositions={handleAnchorPositions}
+                  onToggleTask={handleToggleTask}
                 />
               ) : (
                 <DriveAnnotatedTextarea
@@ -461,6 +588,9 @@ export default function DriveEditor({
                   onChange={(content) => onFormChange({ content })}
                   onSelect={updateSelectionUi}
                   onKeyDown={handleMarkdownKeyDown}
+                  onPaste={handlePaste}
+                  onDrop={handleEditorDrop}
+                  onDragOver={handleEditorDragOver}
                   onAnchorPositions={handleAnchorPositions}
                   placeholder="Start writing…"
                 />

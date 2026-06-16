@@ -57,6 +57,9 @@ export default function DriveAnnotatedTextarea({
   onChange,
   onSelect,
   onKeyDown,
+  onPaste,
+  onDrop,
+  onDragOver,
   onAnchorPositions,
   placeholder,
 }: {
@@ -68,6 +71,9 @@ export default function DriveAnnotatedTextarea({
   onChange: (value: string) => void;
   onSelect: () => void;
   onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  onPaste?: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void;
+  onDrop?: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragOver?: (e: React.DragEvent<HTMLDivElement>) => void;
   onAnchorPositions: (positions: Record<string, number>) => void;
   placeholder: string;
 }) {
@@ -165,7 +171,12 @@ export default function DriveAnnotatedTextarea({
   );
 
   return (
-    <div ref={wrapperRef} className={`relative ${MIN_HEIGHT_CLASS}`}>
+    <div
+      ref={wrapperRef}
+      className={`relative ${MIN_HEIGHT_CLASS}`}
+      onDrop={onDrop}
+      onDragOver={onDragOver}
+    >
       <div
         ref={backdropRef}
         aria-hidden
@@ -204,6 +215,7 @@ export default function DriveAnnotatedTextarea({
         onSelect={onSelect}
         onKeyDown={onKeyDown}
         onKeyUp={handleKeyUp}
+        onPaste={onPaste}
         onMouseUp={onSelect}
         onScroll={() => {
           syncScroll();

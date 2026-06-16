@@ -2,6 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
+/* GFM task lists in the rendered preview: drop the bullet and line the
+   checkbox up with the text so checklists read cleanly (Notion-style). */
+.prose ul.contains-task-list {
+  list-style: none;
+  padding-left: 0;
+}
+.prose li.task-list-item {
+  padding-left: 0;
+}
+.prose li.task-list-item > input[type="checkbox"] {
+  margin: 0 0.5em 0 0;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
 :root {
   --bg: #ffffff;
   --fg: #1a1a1a;

@@ -9,6 +9,7 @@ export type MarkdownActionId =
   | "h3"
   | "ul"
   | "ol"
+  | "task"
   | "quote"
   | "codeBlock"
   | "hr";
@@ -117,6 +118,62 @@ function linePrefix(
   };
 }
 
+// Matches an existing GFM task-list item, capturing the leading indent.
+const TASK_LINE_RE = /^(\s*)[-*+] \[[ xX]\] /;
+// Strips whatever list marker a line already has (bullet, number or task) so we
+// can re-prefix it cleanly.
+const LIST_MARKER_RE = /^([-*+] \[[ xX]\] |[-*+] |\d+\. )/;
+
+function taskList(
+  value: string,
+  selStart: number,
+  selEnd: number,
+): EditResult {
+  const { start, end } = selectedLineBounds(value, selStart, selEnd);
+  const block = value.slice(start, end);
+  const lines = block.split("\n");
+  const nonEmpty = lines.filter((line) => line.trim().length > 0);
+
+  // Collapsed cursor on a blank line — just drop in a fresh unchecked item.
+  if (nonEmpty.length === 0) {
+    const marker = "- [ ] ";
+    const next = value.slice(0, start) + marker + value.slice(start);
+    const pos = start + marker.length;
+    return { value: next, selectionStart: pos, selectionEnd: pos };
+  }
+
+  const allTasks = nonEmpty.every((line) => TASK_LINE_RE.test(line));
+  const nextLines = lines.map((line) => {
+    if (!line.trim()) return line;
+    const indent = /^\s*/.exec(line)?.[0] ?? "";
+    const body = line.slice(indent.length).replace(LIST_MARKER_RE, "");
+    return allTasks ? indent + body : `${indent}- [ ] ${body}`;
+  });
+
+  const nextBlock = nextLines.join("\n");
+  const next = value.slice(0, start) + nextBlock + value.slice(end);
+  const delta = nextBlock.length - block.length;
+  return {
+    value: next,
+    selectionStart: selStart,
+    selectionEnd: selEnd + delta,
+  };
+}
+
+/**
+ * Flip the Nth GFM checkbox in document order between `[ ]` and `[x]`. The index
+ * matches the render order of task checkboxes (react-markdown walks the tree in
+ * source order), so the preview can toggle a box without tracking offsets.
+ */
+export function toggleTaskByIndex(content: string, index: number): string {
+  const re = /^([ \t]*[-*+] +)\[([ xX])\]/gm;
+  let i = 0;
+  return content.replace(re, (match, prefix: string, mark: string) => {
+    if (i++ !== index) return match;
+    return `${prefix}[${mark === " " ? "x" : " "}]`;
+  });
+}
+
 function heading(
   value: string,
   selStart: number,
@@ -205,6 +262,8 @@ export function applyMarkdownEdit(
       return linePrefix(value, start, end, "- ");
     case "ol":
       return linePrefix(value, start, end, "", true);
+    case "task":
+      return taskList(value, start, end);
     case "quote":
       return linePrefix(value, start, end, "> ");
     case "codeBlock":
@@ -248,6 +307,8 @@ function shortcutKey(event: { key: string; code: string }): string {
       return "k";
     case "KeyX":
       return "x";
+    case "Digit0":
+      return "0";
     case "Digit1":
       return "1";
     case "Digit2":
@@ -292,6 +353,7 @@ export function markdownShortcutAction(event: {
 
   if (event.shiftKey) {
     if (key === "x") return "strikethrough";
+    if (key === "0") return "task";
     if (key === "7") return "ol";
     if (key === "8") return "ul";
     if (key === "9") return "quote";

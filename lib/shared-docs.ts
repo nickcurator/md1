@@ -46,6 +46,37 @@ export const MAX_DOC_TITLE_CHARS = 200;
 export const MAX_DOC_COMMENTS = 200;
 export const MAX_FOLDER_NAME_CHARS = 80;
 
+// Inline media (images pasted / dropped / uploaded in the editor) is uploaded
+// to a public Supabase Storage bucket and referenced from the markdown body as
+// `![alt](url)` — so the document content stays plain markdown.
+export const MEDIA_BUCKET = "doc-media";
+export const MAX_MEDIA_BYTES = 10 * 1024 * 1024; // 10 MB
+export const ALLOWED_MEDIA_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+] as const;
+
+export function isAllowedMediaType(type: string): boolean {
+  return (ALLOWED_MEDIA_TYPES as readonly string[]).includes(type);
+}
+
+export function mediaExtension(type: string): string {
+  switch (type) {
+    case "image/png":
+      return "png";
+    case "image/jpeg":
+      return "jpg";
+    case "image/gif":
+      return "gif";
+    case "image/webp":
+      return "webp";
+    default:
+      return "bin";
+  }
+}
+
 export function normalizeFolderName(raw: unknown): string {
   return typeof raw === "string" ? raw.trim() : "";
 }
