@@ -13,28 +13,13 @@ import { resolveCommentRange } from "./drive-comments";
 import type { MarkdownActionId } from "./drive-markdown-edit";
 import DriveSlashMenu from "./DriveSlashMenu";
 import {
+  detectSlash,
   filterSlashCommands,
   type SlashCommand,
 } from "./drive-slash-commands";
 import { getCaretCoords } from "./textarea-caret";
 
 const MIN_HEIGHT_CLASS = "min-h-[calc(100dvh-14rem)]";
-
-// A "/" command is active when the caret sits right after a `/token` that began
-// at line start or after whitespace, with no spaces in the token yet. Returns
-// the position of the `/` and the query typed so far, or null.
-function detectSlash(
-  value: string,
-  caret: number | null,
-): { start: number; query: string } | null {
-  if (caret == null) return null;
-  const lineStart = value.lastIndexOf("\n", caret - 1) + 1;
-  const before = value.slice(lineStart, caret);
-  const match = /(^|\s)\/(\S*)$/.exec(before);
-  if (!match) return null;
-  const query = match[2];
-  return { start: caret - query.length - 1, query };
-}
 
 function buildHighlightParts(content: string, comments: DocComment[]) {
   const resolved = comments

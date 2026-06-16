@@ -8,10 +8,13 @@ import {
   Eye,
   Folder,
   Pencil,
+  Sparkles,
   Trash2,
 } from "lucide-react";
+import type { EditorView } from "@codemirror/view";
 import { shareDocPath, type DocComment, type DriveFolder } from "@/lib/shared-docs";
 import DriveAnnotatedTextarea from "./DriveAnnotatedTextarea";
+import DriveCodeEditor, { type EditorSelectionInfo } from "./DriveCodeEditor";
 import DriveCommentMargin from "./DriveCommentMargin";
 import DriveCommentMarkdown from "./DriveCommentMarkdown";
 import DriveMarkdownToolbar from "./DriveMarkdownToolbar";
@@ -26,6 +29,8 @@ import {
 } from "./drive-markdown-edit";
 import { imageFilesFrom, imageMarkdown, uploadMedia } from "./drive-media";
 import type { DriveEditorLiveReaders } from "./drive-editor-live";
+
+const EDITOR_PREF_KEY = "md1:editor";
 
 function getSelectionTopInContainer(
   textarea: HTMLTextAreaElement,
@@ -103,13 +108,17 @@ export default function DriveEditor({
   onDrop: (e: React.DragEvent) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const contentAreaRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     onRegisterLiveReaders({
-      getContent: () => textareaRef.current?.value ?? null,
+      getContent: () =>
+        editorViewRef.current?.state.doc.toString() ??
+        textareaRef.current?.value ??
+        null,
       getTitle: () => titleInputRef.current?.value ?? null,
     });
     return () => onRegisterLiveReaders(null);
@@ -127,6 +136,27 @@ export default function DriveEditor({
   );
   const [commentOffsetTop, setCommentOffsetTop] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  // Editor surface: CodeMirror (default) or the classic textarea. Persisted so
+  // the user can fall back instantly while CM6 is being validated.
+  const [useCmEditor, setUseCmEditor] = useState(true);
+  useEffect(() => {
+    try {
+      setUseCmEditor(window.localStorage.getItem(EDITOR_PREF_KEY) !== "textarea");
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  const toggleEditorEngine = useCallback(() => {
+    setUseCmEditor((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(EDITOR_PREF_KEY, next ? "cm" : "textarea");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
   const canShare = form.isPublished && !!editingId && !!slug;
 
   useLayoutEffect(() => {
@@ -185,7 +215,10 @@ export default function DriveEditor({
 
   function addComment(text: string) {
     if (!selection) return;
-    const content = textareaRef.current?.value ?? form.content;
+    const content =
+      editorViewRef.current?.state.doc.toString() ??
+      textareaRef.current?.value ??
+      form.content;
     const comment = createDocComment(
       content,
       selection.start,
@@ -197,7 +230,10 @@ export default function DriveEditor({
     setActiveCommentId(comment.id);
     setComposing(false);
     setSelection(null);
-    if (textareaRef.current) {
+    if (editorViewRef.current) {
+      const end = editorViewRef.current.state.selection.main.to;
+      editorViewRef.current.dispatch({ selection: { anchor: end } });
+    } else if (textareaRef.current) {
       const end = textareaRef.current.selectionEnd;
       textareaRef.current.setSelectionRange(end, end);
     }
@@ -220,9 +256,21 @@ export default function DriveEditor({
 
   const applyFormat = useCallback(
     (action: MarkdownActionId) => {
+      const view = editorViewRef.current;
+      if (view) {
+        const value = view.state.doc.toString();
+        const { from, to } = view.state.selection.main;
+        const result = applyMarkdownEdit(value, from, to, action);
+        view.dispatch({
+          changes: { from: 0, to: value.length, insert: result.value },
+          selection: { anchor: result.selectionStart, head: result.selectionEnd },
+        });
+        view.focus();
+        return;
+      }
+
       const ta = textareaRef.current;
       if (!ta || showPreview) return;
-
       const result = applyMarkdownEdit(
         ta.value,
         ta.selectionStart,
@@ -247,10 +295,20 @@ export default function DriveEditor({
     [form.content, onFormChange],
   );
 
-  // Insert text at the caret in the (uncontrolled) textarea, mirroring how
-  // applyFormat writes back to both the element and React state.
+  // Insert text at the caret. Routes to the active surface (CodeMirror or the
+  // classic uncontrolled textarea), keeping React state in sync.
   const insertAtCursor = useCallback(
     (text: string) => {
+      const view = editorViewRef.current;
+      if (view) {
+        const { from, to } = view.state.selection.main;
+        view.dispatch({
+          changes: { from, to, insert: text },
+          selection: { anchor: from + text.length },
+        });
+        view.focus();
+        return;
+      }
       const ta = textareaRef.current;
       if (!ta) return;
       const start = ta.selectionStart;
@@ -267,8 +325,18 @@ export default function DriveEditor({
     [onFormChange],
   );
 
-  const replaceInTextarea = useCallback(
+  const replaceInEditor = useCallback(
     (token: string, replacement: string) => {
+      const view = editorViewRef.current;
+      if (view) {
+        const value = view.state.doc.toString();
+        const idx = value.indexOf(token);
+        if (idx === -1) return;
+        view.dispatch({
+          changes: { from: idx, to: idx + token.length, insert: replacement },
+        });
+        return;
+      }
       const ta = textareaRef.current;
       if (!ta || !ta.value.includes(token)) return;
       const next = ta.value.replace(token, replacement);
@@ -286,14 +354,32 @@ export default function DriveEditor({
       insertAtCursor(placeholder + "\n");
       try {
         const { url, name } = await uploadMedia(file);
-        replaceInTextarea(placeholder, imageMarkdown(name, url));
+        replaceInEditor(placeholder, imageMarkdown(name, url));
       } catch (err) {
-        replaceInTextarea(placeholder + "\n", "");
+        replaceInEditor(placeholder + "\n", "");
         setMediaError(err instanceof Error ? err.message : "Upload failed");
       }
     },
-    [insertAtCursor, replaceInTextarea],
+    [insertAtCursor, replaceInEditor],
   );
+
+  const handleInsertImageFiles = useCallback(
+    (files: File[]) => {
+      if (files.length === 0) return;
+      setMediaError(null);
+      for (const file of files) void uploadAndInsert(file);
+    },
+    [uploadAndInsert],
+  );
+
+  const handleEditorSelection = useCallback((sel: EditorSelectionInfo | null) => {
+    if (!sel) {
+      setSelection(null);
+      return;
+    }
+    setSelection({ start: sel.start, end: sel.end, quote: sel.quote });
+    setSelectionTop(sel.top);
+  }, []);
 
   const handlePaste = useCallback(
     (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -415,6 +501,18 @@ export default function DriveEditor({
           {showPreview ? <Pencil size={15} /> : <Eye size={15} />}
           {showPreview ? "Edit" : "Preview"}
         </button>
+
+        {!showPreview && (
+          <button
+            type="button"
+            onClick={toggleEditorEngine}
+            title="Switch editor engine"
+            className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)]"
+          >
+            <Sparkles size={15} />
+            {useCmEditor ? "Classic editor" : "New editor"}
+          </button>
+        )}
 
         <label
           title="Folder"
@@ -577,6 +675,22 @@ export default function DriveEditor({
                   onCommentClick={focusComment}
                   onAnchorPositions={handleAnchorPositions}
                   onToggleTask={handleToggleTask}
+                />
+              ) : useCmEditor ? (
+                <DriveCodeEditor
+                  key={editingId}
+                  value={form.content}
+                  documentKey={editingId}
+                  comments={form.comments}
+                  activeCommentId={activeCommentId}
+                  placeholder="Start writing…"
+                  editorViewRef={editorViewRef}
+                  onChange={(content) => onFormChange({ content })}
+                  onSelectionChange={handleEditorSelection}
+                  onAnchorPositions={handleAnchorPositions}
+                  onApplyAction={applyFormat}
+                  onInsertImage={handlePickImage}
+                  onInsertImageFiles={handleInsertImageFiles}
                 />
               ) : (
                 <DriveAnnotatedTextarea
