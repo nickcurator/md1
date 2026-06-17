@@ -120,3 +120,40 @@ body {
     opacity: 1;
   }
 }
+
+/* TipTap (WYSIWYG) editing affordances. Content is styled by the shared `prose`
+   classes; these add what prose doesn't: table borders/handles and gapcursor. */
+.ProseMirror { -webkit-tap-highlight-color: transparent; }
+.ProseMirror table {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: fixed;
+  overflow: hidden;
+}
+.ProseMirror th,
+.ProseMirror td {
+  border: 1px solid var(--border);
+  padding: 0.4em 0.6em;
+  vertical-align: top;
+  position: relative;
+}
+.ProseMirror th { background: var(--card); font-weight: 600; }
+.ProseMirror .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(252, 211, 77, 0.18);
+  pointer-events: none;
+}
+.ProseMirror .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--fg);
+  opacity: 0.3;
+  cursor: col-resize;
+}
+.ProseMirror .tableWrapper { overflow-x: auto; }
+.ProseMirror .ProseMirror-gapcursor:after { border-top-color: var(--fg); }

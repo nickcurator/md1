@@ -543,6 +543,7 @@ export default function DriveEditor({
                   documentKey={editingId}
                   onChange={(content) => onFormChange({ content })}
                   editorRef={tiptapEditorRef}
+                  onInsertImage={handlePickImage}
                   onInsertImageFiles={handleInsertImageFiles}
                 />
               ) : (

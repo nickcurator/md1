@@ -54,8 +54,7 @@ export function runTipTapAction(editor: Editor, action: MarkdownActionId): void 
       chain.setHorizontalRule().run();
       break;
     case "table":
-      // Table extension is wired in Stage 2.
-      chain.run();
+      chain.insertTable({ rows: 3, cols: 2, withHeaderRow: true }).run();
       break;
     default:
       chain.run();

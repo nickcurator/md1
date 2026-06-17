@@ -4,11 +4,13 @@ import { useEffect, useRef } from "react";
 import type { Editor } from "@tiptap/core";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import Image from "@tiptap/extension-image";
 import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
+import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
 import { Markdown, type MarkdownStorage } from "tiptap-markdown";
 import { imageFilesFrom } from "./drive-media";
+import { ResizableImage } from "./tiptap/image-node";
+import { createSlashExtension } from "./tiptap/slash";
 
 function getMarkdown(editor: Editor): string {
   return (editor.storage as unknown as { markdown: MarkdownStorage }).markdown.getMarkdown();
@@ -25,17 +27,19 @@ export default function DriveTipTapEditor({
   value,
   onChange,
   editorRef,
+  onInsertImage,
   onInsertImageFiles,
 }: {
   value: string;
   documentKey: string;
   onChange: (markdown: string) => void;
   editorRef: React.RefObject<Editor | null>;
+  onInsertImage: () => void;
   onInsertImageFiles: (files: File[]) => void;
 }) {
   // Latest callbacks via ref so the editor (created once) reads current props.
-  const cbRef = useRef({ onChange, onInsertImageFiles });
-  cbRef.current = { onChange, onInsertImageFiles };
+  const cbRef = useRef({ onChange, onInsertImage, onInsertImageFiles });
+  cbRef.current = { onChange, onInsertImage, onInsertImageFiles };
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -43,7 +47,12 @@ export default function DriveTipTapEditor({
       StarterKit,
       TaskList,
       TaskItem.configure({ nested: true }),
-      Image.configure({ inline: false }),
+      ResizableImage.configure({ inline: false }),
+      Table.configure({ resizable: true }),
+      TableRow,
+      TableHeader,
+      TableCell,
+      createSlashExtension(() => cbRef.current.onInsertImage()),
       Markdown.configure({
         html: false,
         linkify: true,
