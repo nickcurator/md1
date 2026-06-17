@@ -21,7 +21,7 @@ import DriveCommentMargin from "./DriveCommentMargin";
 import DriveCommentMarkdown from "./DriveCommentMarkdown";
 import DriveMarkdownToolbar from "./DriveMarkdownToolbar";
 import DriveSelectionCommentButton from "./DriveSelectionCommentButton";
-import { createDocComment } from "./drive-comments";
+import { createDocComment, createDocCommentFromQuote } from "./drive-comments";
 import {
   applyMarkdownEdit,
   toggleTaskByIndex,
@@ -165,13 +165,14 @@ export default function DriveEditor({
 
   function addComment(text: string) {
     if (!selection) return;
-    const content = editorViewRef.current?.state.doc.toString() ?? form.content;
-    const comment = createDocComment(
-      content,
-      selection.start,
-      selection.end,
-      text,
-    );
+    const comment = tiptapEditorRef.current
+      ? createDocCommentFromQuote(selection.quote, text)
+      : createDocComment(
+          editorViewRef.current?.state.doc.toString() ?? form.content,
+          selection.start,
+          selection.end,
+          text,
+        );
     if (!comment) return;
     onFormChange({ comments: [...form.comments, comment] });
     setActiveCommentId(comment.id);
@@ -541,10 +542,15 @@ export default function DriveEditor({
                   key={editingId}
                   value={form.content}
                   documentKey={editingId}
+                  comments={form.comments}
+                  activeCommentId={activeCommentId}
                   onChange={(content) => onFormChange({ content })}
                   editorRef={tiptapEditorRef}
                   onInsertImage={handlePickImage}
                   onInsertImageFiles={handleInsertImageFiles}
+                  onSelectionChange={handleEditorSelection}
+                  onAnchorPositions={handleAnchorPositions}
+                  onCommentClick={focusComment}
                 />
               ) : (
                 <DriveCodeEditor
@@ -564,7 +570,7 @@ export default function DriveEditor({
                 />
               )}
 
-              {!showPreview && !useTipTap && selection && !composing && (
+              {!showPreview && selection && !composing && (
                 <DriveSelectionCommentButton
                   top={selectionTop}
                   onClick={() => setComposing(true)}
@@ -573,7 +579,7 @@ export default function DriveEditor({
             </div>
           </div>
 
-          {showCommentMargin && !useTipTap && (
+          {showCommentMargin && (
             <div className="relative hidden min-h-0 self-stretch lg:block">
               <DriveCommentMargin
                 content={form.content}

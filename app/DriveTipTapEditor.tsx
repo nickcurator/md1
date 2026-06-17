@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { Editor } from "@tiptap/core";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -8,9 +8,16 @@ import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
 import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
 import { Markdown, type MarkdownStorage } from "tiptap-markdown";
+import type { DocComment } from "@/lib/shared-docs";
+import type { EditorSelectionInfo } from "./DriveCodeEditor";
 import { imageFilesFrom } from "./drive-media";
 import { ResizableImage } from "./tiptap/image-node";
 import { createSlashExtension } from "./tiptap/slash";
+import {
+  CommentsExtension,
+  commentRanges,
+  commentsPluginKey,
+} from "./tiptap/comments";
 
 function getMarkdown(editor: Editor): string {
   return (editor.storage as unknown as { markdown: MarkdownStorage }).markdown.getMarkdown();
@@ -25,21 +32,82 @@ const PROSE_CLASS =
 
 export default function DriveTipTapEditor({
   value,
+  comments,
+  activeCommentId,
   onChange,
   editorRef,
   onInsertImage,
   onInsertImageFiles,
+  onSelectionChange,
+  onAnchorPositions,
+  onCommentClick,
 }: {
   value: string;
   documentKey: string;
+  comments: DocComment[];
+  activeCommentId: string | null;
   onChange: (markdown: string) => void;
   editorRef: React.RefObject<Editor | null>;
   onInsertImage: () => void;
   onInsertImageFiles: (files: File[]) => void;
+  onSelectionChange: (selection: EditorSelectionInfo | null) => void;
+  onAnchorPositions: (positions: Record<string, number>) => void;
+  onCommentClick: (id: string) => void;
 }) {
-  // Latest callbacks via ref so the editor (created once) reads current props.
-  const cbRef = useRef({ onChange, onInsertImage, onInsertImageFiles });
-  cbRef.current = { onChange, onInsertImage, onInsertImageFiles };
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  // Latest props via ref so the editor (created once) reads current values.
+  const cbRef = useRef({
+    onChange,
+    onInsertImage,
+    onInsertImageFiles,
+    onSelectionChange,
+    onAnchorPositions,
+    onCommentClick,
+    comments,
+  });
+  cbRef.current = {
+    onChange,
+    onInsertImage,
+    onInsertImageFiles,
+    onSelectionChange,
+    onAnchorPositions,
+    onCommentClick,
+    comments,
+  };
+
+  // Push selection (for the comment button) + comment anchor positions (for the
+  // margin) from the live editor up to the parent.
+  const syncFromEditor = useCallback((ed: Editor) => {
+    const cb = cbRef.current;
+    const wrapTop = wrapperRef.current?.getBoundingClientRect().top ?? 0;
+    try {
+      const sel = ed.state.selection;
+      if (sel.empty) {
+        cb.onSelectionChange(null);
+      } else {
+        const quote = ed.state.doc.textBetween(sel.from, sel.to, "", "");
+        if (!quote.trim()) {
+          cb.onSelectionChange(null);
+        } else {
+          const coords = ed.view.coordsAtPos(sel.from);
+          cb.onSelectionChange({
+            start: sel.from,
+            end: sel.to,
+            quote,
+            top: coords.top - wrapTop,
+          });
+        }
+      }
+      const positions: Record<string, number> = {};
+      const ranges = commentRanges(ed.state.doc, cb.comments);
+      for (const [id, r] of Object.entries(ranges)) {
+        positions[id] = ed.view.coordsAtPos(r.from).top - wrapTop;
+      }
+      cb.onAnchorPositions(positions);
+    } catch {
+      /* view not ready */
+    }
+  }, []);
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -53,6 +121,7 @@ export default function DriveTipTapEditor({
       TableHeader,
       TableCell,
       createSlashExtension(() => cbRef.current.onInsertImage()),
+      CommentsExtension,
       Markdown.configure({
         html: false,
         linkify: true,
@@ -70,9 +139,7 @@ export default function DriveTipTapEditor({
         return true;
       },
       handleDrop: (_view, event) => {
-        const files = imageFilesFrom(
-          (event as DragEvent).dataTransfer?.files,
-        );
+        const files = imageFilesFrom((event as DragEvent).dataTransfer?.files);
         if (files.length === 0) return false;
         event.preventDefault();
         cbRef.current.onInsertImageFiles(files);
@@ -81,6 +148,10 @@ export default function DriveTipTapEditor({
     },
     onUpdate: ({ editor }) => {
       cbRef.current.onChange(getMarkdown(editor));
+      syncFromEditor(editor);
+    },
+    onSelectionUpdate: ({ editor }) => {
+      syncFromEditor(editor);
     },
   });
 
@@ -91,5 +162,29 @@ export default function DriveTipTapEditor({
     };
   }, [editor, editorRef]);
 
-  return <EditorContent editor={editor} />;
+  // Feed comments / active id into the decoration plugin, then refresh anchors.
+  useEffect(() => {
+    if (!editor) return;
+    editor.view.dispatch(
+      editor.state.tr.setMeta(commentsPluginKey, {
+        comments,
+        activeId: activeCommentId,
+      }),
+    );
+    syncFromEditor(editor);
+  }, [editor, comments, activeCommentId, syncFromEditor]);
+
+  const handleClick = (e: React.MouseEvent) => {
+    const anchor = (e.target as HTMLElement).closest<HTMLElement>(
+      "[data-comment-anchor]",
+    );
+    const id = anchor?.dataset.commentAnchor;
+    if (id) cbRef.current.onCommentClick(id);
+  };
+
+  return (
+    <div ref={wrapperRef} onClick={handleClick}>
+      <EditorContent editor={editor} />
+    </div>
+  );
 }

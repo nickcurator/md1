@@ -102,3 +102,23 @@ export function createDocComment(
     createdAt: new Date().toISOString(),
   };
 }
+
+// Create a comment from a quoted string (WYSIWYG editor: the selection text is
+// known, but there's no meaningful Markdown offset). Anchoring is by quote;
+// start/end are unused there.
+export function createDocCommentFromQuote(
+  quote: string,
+  text: string,
+): DocComment | null {
+  const trimmedQuote = quote.trim();
+  const body = text.trim();
+  if (!trimmedQuote || !body) return null;
+  return {
+    id: crypto.randomUUID(),
+    quote,
+    start: 0,
+    end: 0,
+    text: body,
+    createdAt: new Date().toISOString(),
+  };
+}

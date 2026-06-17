@@ -157,3 +157,14 @@ body {
 }
 .ProseMirror .tableWrapper { overflow-x: auto; }
 .ProseMirror .ProseMirror-gapcursor:after { border-top-color: var(--fg); }
+
+/* Comment highlights in the WYSIWYG editor (ProseMirror inline decorations). */
+.ProseMirror .comment-hl {
+  background: rgba(253, 230, 138, 0.6);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.ProseMirror .comment-hl-active {
+  background: rgba(252, 211, 77, 0.75);
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.5);
+}
