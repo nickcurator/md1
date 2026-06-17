@@ -74,7 +74,6 @@ export default function DriveManager({
         }
       : EMPTY_FORM,
   );
-  const [showPreview, setShowPreview] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saveStatus, setSaveStatus] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -241,7 +240,6 @@ export default function DriveManager({
       setForm(next);
       formRef.current = next;
       lastSavedRef.current = snapshot(doc.id, next);
-      setShowPreview(false);
       setError(null);
       setSaveStatus("idle");
     },
@@ -277,7 +275,6 @@ export default function DriveManager({
       setForm(next);
       formRef.current = next;
       lastSavedRef.current = snapshot(saved.id, next);
-      setShowPreview(false);
       setSaveStatus("idle");
       analytics.docCreated({ docId: saved.id, via: "ui" });
     } catch (err) {
@@ -404,16 +401,6 @@ export default function DriveManager({
     [applySavedDoc, markSaved, persist, readLiveForm, scheduleSave],
   );
 
-  const syncLiveFormToState = useCallback(() => {
-    const live = readLiveForm();
-    formRef.current = live;
-    setForm(live);
-  }, [readLiveForm]);
-
-  const togglePreview = useCallback(() => {
-    syncLiveFormToState();
-    setShowPreview((p) => !p);
-  }, [syncLiveFormToState]);
 
   async function publish() {
     const id = editingIdRef.current;
@@ -561,7 +548,6 @@ export default function DriveManager({
           form={form}
           folders={folders}
           slug={selectedDoc?.slug}
-          showPreview={showPreview}
           busy={busy}
           saveStatus={saveStatus}
           error={error}
@@ -571,7 +557,6 @@ export default function DriveManager({
           onRegisterLiveReaders={(readers) => {
             liveReadersRef.current = readers;
           }}
-          onTogglePreview={togglePreview}
           onPublish={() => void publish()}
           onUnpublish={() => void unpublish()}
           onDelete={() => void removeCurrent()}

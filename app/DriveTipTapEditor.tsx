@@ -9,7 +9,6 @@ import TaskList from "@tiptap/extension-task-list";
 import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
 import { Markdown, type MarkdownStorage } from "tiptap-markdown";
 import type { DocComment } from "@/lib/shared-docs";
-import type { EditorSelectionInfo } from "./DriveCodeEditor";
 import { imageFilesFrom } from "./drive-media";
 import { ResizableImage } from "./tiptap/image-node";
 import { createSlashExtension } from "./tiptap/slash";
@@ -19,7 +18,14 @@ import {
   commentsPluginKey,
 } from "./tiptap/comments";
 
-function getMarkdown(editor: Editor): string {
+export type EditorSelectionInfo = {
+  start: number;
+  end: number;
+  quote: string;
+  top: number;
+};
+
+export function getMarkdown(editor: Editor): string {
   return (editor.storage as unknown as { markdown: MarkdownStorage }).markdown.getMarkdown();
 }
 

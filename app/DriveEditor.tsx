@@ -1,36 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import {
-  Check,
-  Copy,
-  ExternalLink,
-  Eye,
-  Folder,
-  Pencil,
-  Sparkles,
-  Trash2,
-} from "lucide-react";
-import type { EditorView } from "@codemirror/view";
+import { Check, Copy, ExternalLink, Folder, Trash2 } from "lucide-react";
 import type { Editor } from "@tiptap/core";
 import { shareDocPath, type DocComment, type DriveFolder } from "@/lib/shared-docs";
-import DriveCodeEditor, { type EditorSelectionInfo } from "./DriveCodeEditor";
-import DriveTipTapEditor from "./DriveTipTapEditor";
+import DriveTipTapEditor, {
+  getMarkdown,
+  type EditorSelectionInfo,
+} from "./DriveTipTapEditor";
 import { runTipTapAction } from "./tiptap/commands";
 import DriveCommentMargin from "./DriveCommentMargin";
-import DriveCommentMarkdown from "./DriveCommentMarkdown";
 import DriveMarkdownToolbar from "./DriveMarkdownToolbar";
 import DriveSelectionCommentButton from "./DriveSelectionCommentButton";
-import { createDocComment, createDocCommentFromQuote } from "./drive-comments";
-import {
-  applyMarkdownEdit,
-  toggleTaskByIndex,
-  type MarkdownActionId,
-} from "./drive-markdown-edit";
-import { imageFilesFrom, imageMarkdown, uploadMedia } from "./drive-media";
+import { createDocCommentFromQuote } from "./drive-comments";
+import type { MarkdownActionId } from "./drive-markdown-edit";
+import { imageFilesFrom, uploadMedia } from "./drive-media";
 import type { DriveEditorLiveReaders } from "./drive-editor-live";
-
-const EDITOR_PREF_KEY = "md1:editor";
 
 type Form = {
   title: string;
@@ -47,7 +32,6 @@ export default function DriveEditor({
   form,
   folders,
   slug,
-  showPreview,
   busy,
   saveStatus,
   error,
@@ -55,7 +39,6 @@ export default function DriveEditor({
   dragActive,
   onFormChange,
   onRegisterLiveReaders,
-  onTogglePreview,
   onPublish,
   onUnpublish,
   onDelete,
@@ -69,7 +52,6 @@ export default function DriveEditor({
   form: Form;
   folders: DriveFolder[];
   slug?: string;
-  showPreview: boolean;
   busy: boolean;
   saveStatus: "idle" | "saving" | "saved" | "error";
   error: string | null;
@@ -77,7 +59,6 @@ export default function DriveEditor({
   dragActive: boolean;
   onFormChange: (patch: Partial<Form>) => void;
   onRegisterLiveReaders: (readers: DriveEditorLiveReaders | null) => void;
-  onTogglePreview: () => void;
   onPublish: () => void;
   onUnpublish: () => void;
   onDelete: () => void;
@@ -87,7 +68,6 @@ export default function DriveEditor({
   onDragLeave: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
 }) {
-  const editorViewRef = useRef<EditorView | null>(null);
   const tiptapEditorRef = useRef<Editor | null>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const contentAreaRef = useRef<HTMLDivElement>(null);
@@ -95,11 +75,13 @@ export default function DriveEditor({
 
   useEffect(() => {
     onRegisterLiveReaders({
-      getContent: () => editorViewRef.current?.state.doc.toString() ?? null,
+      getContent: () =>
+        tiptapEditorRef.current ? getMarkdown(tiptapEditorRef.current) : null,
       getTitle: () => titleInputRef.current?.value ?? null,
     });
     return () => onRegisterLiveReaders(null);
   }, [editingId, onRegisterLiveReaders]);
+
   const [selection, setSelection] = useState<{
     start: number;
     end: number;
@@ -113,27 +95,6 @@ export default function DriveEditor({
   );
   const [commentOffsetTop, setCommentOffsetTop] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
-  // WYSIWYG (TipTap) vs the CodeMirror markdown editor. Persisted; CM6 kept as a
-  // fallback while the rich editor is validated.
-  const [useTipTap, setUseTipTap] = useState(true);
-  useEffect(() => {
-    try {
-      setUseTipTap(window.localStorage.getItem(EDITOR_PREF_KEY) !== "cm");
-    } catch {
-      /* ignore */
-    }
-  }, []);
-  const toggleEditorEngine = useCallback(() => {
-    setUseTipTap((prev) => {
-      const next = !prev;
-      try {
-        window.localStorage.setItem(EDITOR_PREF_KEY, next ? "tiptap" : "cm");
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  }, []);
   const canShare = form.isPublished && !!editingId && !!slug;
 
   useLayoutEffect(() => {
@@ -144,7 +105,7 @@ export default function DriveEditor({
     const observer = new ResizeObserver(update);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [showPreview, form.title, form.isPublished, editingId]);
+  }, [form.title, form.isPublished, editingId]);
 
   const handleAnchorPositions = useCallback((positions: Record<string, number>) => {
     setAnchorPositions(positions);
@@ -156,39 +117,21 @@ export default function DriveEditor({
     document
       .getElementById(`drive-comment-card-${id}`)
       ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    if (showPreview) {
-      document
-        .getElementById(`drive-comment-${id}`)
-        ?.scrollIntoView({ block: "center", behavior: "smooth" });
-    }
   }
 
   function addComment(text: string) {
     if (!selection) return;
-    const comment = tiptapEditorRef.current
-      ? createDocCommentFromQuote(selection.quote, text)
-      : createDocComment(
-          editorViewRef.current?.state.doc.toString() ?? form.content,
-          selection.start,
-          selection.end,
-          text,
-        );
+    const comment = createDocCommentFromQuote(selection.quote, text);
     if (!comment) return;
     onFormChange({ comments: [...form.comments, comment] });
     setActiveCommentId(comment.id);
     setComposing(false);
     setSelection(null);
-    const view = editorViewRef.current;
-    if (view) {
-      view.dispatch({ selection: { anchor: view.state.selection.main.to } });
-    }
   }
 
   function updateComment(id: string, text: string) {
     onFormChange({
-      comments: form.comments.map((c) =>
-        c.id === id ? { ...c, text } : c,
-      ),
+      comments: form.comments.map((c) => (c.id === id ? { ...c, text } : c)),
     });
   }
 
@@ -201,78 +144,19 @@ export default function DriveEditor({
 
   const applyFormat = useCallback((action: MarkdownActionId) => {
     const tt = tiptapEditorRef.current;
-    if (tt) {
-      runTipTapAction(tt, action);
-      return;
+    if (tt) runTipTapAction(tt, action);
+  }, []);
+
+  const uploadAndInsert = useCallback(async (file: File) => {
+    const tt = tiptapEditorRef.current;
+    if (!tt) return;
+    try {
+      const { url, name } = await uploadMedia(file);
+      tt.chain().focus().setImage({ src: url, alt: name }).run();
+    } catch (err) {
+      setMediaError(err instanceof Error ? err.message : "Upload failed");
     }
-    const view = editorViewRef.current;
-    if (!view) return;
-    const value = view.state.doc.toString();
-    const { from, to } = view.state.selection.main;
-    const result = applyMarkdownEdit(value, from, to, action);
-    view.dispatch({
-      changes: { from: 0, to: value.length, insert: result.value },
-      selection: { anchor: result.selectionStart, head: result.selectionEnd },
-    });
-    view.focus();
   }, []);
-
-  const handleToggleTask = useCallback(
-    (index: number) => {
-      onFormChange({ content: toggleTaskByIndex(form.content, index) });
-    },
-    [form.content, onFormChange],
-  );
-
-  // Insert text at the caret in the CodeMirror view.
-  const insertAtCursor = useCallback((text: string) => {
-    const view = editorViewRef.current;
-    if (!view) return;
-    const { from, to } = view.state.selection.main;
-    view.dispatch({
-      changes: { from, to, insert: text },
-      selection: { anchor: from + text.length },
-    });
-    view.focus();
-  }, []);
-
-  const replaceInEditor = useCallback((token: string, replacement: string) => {
-    const view = editorViewRef.current;
-    if (!view) return;
-    const value = view.state.doc.toString();
-    const idx = value.indexOf(token);
-    if (idx === -1) return;
-    view.dispatch({
-      changes: { from: idx, to: idx + token.length, insert: replacement },
-    });
-  }, []);
-
-  // Drop a placeholder in immediately, then swap it for the real `![](url)`
-  // once the upload resolves (or remove it on failure).
-  const uploadAndInsert = useCallback(
-    async (file: File) => {
-      const tt = tiptapEditorRef.current;
-      if (tt) {
-        try {
-          const { url, name } = await uploadMedia(file);
-          tt.chain().focus().setImage({ src: url, alt: name }).run();
-        } catch (err) {
-          setMediaError(err instanceof Error ? err.message : "Upload failed");
-        }
-        return;
-      }
-      const placeholder = `![Uploading ${file.name}…](uploading:${crypto.randomUUID()})`;
-      insertAtCursor(placeholder + "\n");
-      try {
-        const { url, name } = await uploadMedia(file);
-        replaceInEditor(placeholder, imageMarkdown(name, url));
-      } catch (err) {
-        replaceInEditor(placeholder + "\n", "");
-        setMediaError(err instanceof Error ? err.message : "Upload failed");
-      }
-    },
-    [insertAtCursor, replaceInEditor],
-  );
 
   const handleInsertImageFiles = useCallback(
     (files: File[]) => {
@@ -334,8 +218,7 @@ export default function DriveEditor({
     );
   }
 
-  const showCommentMargin =
-    composing || form.comments.length > 0;
+  const showCommentMargin = composing || form.comments.length > 0;
 
   return (
     <div
@@ -354,27 +237,6 @@ export default function DriveEditor({
       )}
 
       <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--bg)] py-2.5 pl-4 pr-14">
-        <button
-          type="button"
-          onClick={onTogglePreview}
-          className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)]"
-        >
-          {showPreview ? <Pencil size={15} /> : <Eye size={15} />}
-          {showPreview ? "Edit" : "Preview"}
-        </button>
-
-        {!showPreview && (
-          <button
-            type="button"
-            onClick={toggleEditorEngine}
-            title="Switch editor engine"
-            className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)]"
-          >
-            <Sparkles size={15} />
-            {useTipTap ? "Markdown mode" : "Rich mode"}
-          </button>
-        )}
-
         <label
           title="Folder"
           className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border)] px-2 py-1.5 text-sm text-[var(--muted)]"
@@ -384,9 +246,7 @@ export default function DriveEditor({
             aria-label="Folder"
             value={form.folderId ?? ""}
             disabled={busy}
-            onChange={(e) =>
-              onFormChange({ folderId: e.target.value || null })
-            }
+            onChange={(e) => onFormChange({ folderId: e.target.value || null })}
             className="max-w-40 bg-transparent text-[var(--fg)] outline-none disabled:opacity-50"
           >
             <option value="">My Drive</option>
@@ -467,9 +327,7 @@ export default function DriveEditor({
           {saveStatus !== "idle" && (
             <span
               className={`text-xs ${
-                saveStatus === "error"
-                  ? "text-red-500"
-                  : "text-[var(--muted)]"
+                saveStatus === "error" ? "text-red-500" : "text-[var(--muted)]"
               }`}
             >
               {saveStatus === "saving"
@@ -506,12 +364,10 @@ export default function DriveEditor({
               </p>
             )}
 
-            {!showPreview && (
-              <DriveMarkdownToolbar
-                onAction={applyFormat}
-                onInsertImage={handlePickImage}
-              />
-            )}
+            <DriveMarkdownToolbar
+              onAction={applyFormat}
+              onInsertImage={handlePickImage}
+            />
             <input
               ref={fileInputRef}
               type="file"
@@ -524,53 +380,23 @@ export default function DriveEditor({
               <p className="mb-3 text-sm text-red-500">{mediaError}</p>
             )}
 
-            <div
-              ref={contentAreaRef}
-              className="relative flex flex-col"
-            >
-              {showPreview ? (
-                <DriveCommentMarkdown
-                  content={form.content}
-                  comments={form.comments}
-                  activeCommentId={activeCommentId}
-                  onCommentClick={focusComment}
-                  onAnchorPositions={handleAnchorPositions}
-                  onToggleTask={handleToggleTask}
-                />
-              ) : useTipTap ? (
-                <DriveTipTapEditor
-                  key={editingId}
-                  value={form.content}
-                  documentKey={editingId}
-                  comments={form.comments}
-                  activeCommentId={activeCommentId}
-                  onChange={(content) => onFormChange({ content })}
-                  editorRef={tiptapEditorRef}
-                  onInsertImage={handlePickImage}
-                  onInsertImageFiles={handleInsertImageFiles}
-                  onSelectionChange={handleEditorSelection}
-                  onAnchorPositions={handleAnchorPositions}
-                  onCommentClick={focusComment}
-                />
-              ) : (
-                <DriveCodeEditor
-                  key={editingId}
-                  value={form.content}
-                  documentKey={editingId}
-                  comments={form.comments}
-                  activeCommentId={activeCommentId}
-                  placeholder="Start writing…"
-                  editorViewRef={editorViewRef}
-                  onChange={(content) => onFormChange({ content })}
-                  onSelectionChange={handleEditorSelection}
-                  onAnchorPositions={handleAnchorPositions}
-                  onApplyAction={applyFormat}
-                  onInsertImage={handlePickImage}
-                  onInsertImageFiles={handleInsertImageFiles}
-                />
-              )}
+            <div ref={contentAreaRef} className="relative flex flex-col">
+              <DriveTipTapEditor
+                key={editingId}
+                value={form.content}
+                documentKey={editingId}
+                comments={form.comments}
+                activeCommentId={activeCommentId}
+                onChange={(content) => onFormChange({ content })}
+                editorRef={tiptapEditorRef}
+                onInsertImage={handlePickImage}
+                onInsertImageFiles={handleInsertImageFiles}
+                onSelectionChange={handleEditorSelection}
+                onAnchorPositions={handleAnchorPositions}
+                onCommentClick={focusComment}
+              />
 
-              {!showPreview && selection && !composing && (
+              {selection && !composing && (
                 <DriveSelectionCommentButton
                   top={selectionTop}
                   onClick={() => setComposing(true)}
