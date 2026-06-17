@@ -20,6 +20,7 @@ import {
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import type { DocComment } from "@/lib/shared-docs";
+import { imagePreview } from "./cm/images";
 import { resolveCommentRange } from "./drive-comments";
 import {
   detectSlash,
@@ -116,6 +117,32 @@ const editorTheme = EditorView.theme({
   ".cm-line": { padding: "0" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--fg)" },
   ".cm-placeholder": { color: "var(--muted)" },
+  ".cm-image-widget": {
+    position: "relative",
+    display: "inline-block",
+    maxWidth: "100%",
+    verticalAlign: "top",
+  },
+  ".cm-image-widget-img": {
+    display: "block",
+    maxWidth: "100%",
+    height: "auto",
+    borderRadius: "8px",
+    border: "1px solid var(--border)",
+  },
+  ".cm-image-resize-handle": {
+    position: "absolute",
+    right: "6px",
+    bottom: "6px",
+    width: "14px",
+    height: "14px",
+    borderRadius: "3px",
+    border: "2px solid var(--bg)",
+    backgroundColor: "var(--fg)",
+    opacity: "0.55",
+    cursor: "nwse-resize",
+  },
+  ".cm-image-resize-handle:hover": { opacity: "0.9" },
 });
 
 export default function DriveCodeEditor({
@@ -328,6 +355,7 @@ export default function DriveCodeEditor({
         commentsField,
         activeField,
         commentDecoPlugin,
+        imagePreview,
         EditorView.updateListener.of((u) => {
           if (u.docChanged) propsRef.current.onChange(u.state.doc.toString());
           if (u.docChanged || u.selectionSet || u.geometryChanged) {

@@ -2,6 +2,23 @@
 
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { parseImageWidth } from "@/app/drive-image-size";
+
+// Render images at the width stored in their title (`![alt](url "w=400")`), so
+// resized images keep their size in the preview and on the public page. The
+// title is consumed (not shown as a tooltip).
+const imageWithWidth: Components["img"] = ({ src, alt, title }) => {
+  const width = parseImageWidth(typeof title === "string" ? title : null);
+  // eslint-disable-next-line @next/next/no-img-element
+  return (
+    <img
+      src={typeof src === "string" ? src : undefined}
+      alt={alt ?? ""}
+      loading="lazy"
+      style={width ? { width: `${width}px`, maxWidth: "100%" } : undefined}
+    />
+  );
+};
 
 // Shared markdown renderer. GFM enables tables, task lists, strikethrough and
 // autolinks — the things our internal docs actually use. Styling comes from
@@ -20,7 +37,10 @@ export default function Markdown({
 }) {
   return (
     <div className={className}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{ img: imageWithWidth, ...components }}
+      >
         {content}
       </ReactMarkdown>
     </div>
