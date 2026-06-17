@@ -20,6 +20,7 @@ import {
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import type { DocComment } from "@/lib/shared-docs";
+import { dividerPreview } from "./cm/divider";
 import { imagePreview } from "./cm/images";
 import { resolveCommentRange } from "./drive-comments";
 import {
@@ -143,6 +144,11 @@ const editorTheme = EditorView.theme({
     cursor: "nwse-resize",
   },
   ".cm-image-resize-handle:hover": { opacity: "0.9" },
+  ".cm-hr-widget": {
+    display: "block",
+    borderTop: "2px solid var(--border)",
+    margin: "0.7em 0",
+  },
 });
 
 export default function DriveCodeEditor({
@@ -356,6 +362,7 @@ export default function DriveCodeEditor({
         activeField,
         commentDecoPlugin,
         imagePreview,
+        dividerPreview,
         EditorView.updateListener.of((u) => {
           if (u.docChanged) propsRef.current.onChange(u.state.doc.toString());
           if (u.docChanged || u.selectionSet || u.geometryChanged) {
