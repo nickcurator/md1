@@ -8,12 +8,10 @@ import {
   Eye,
   Folder,
   Pencil,
-  Sparkles,
   Trash2,
 } from "lucide-react";
 import type { EditorView } from "@codemirror/view";
 import { shareDocPath, type DocComment, type DriveFolder } from "@/lib/shared-docs";
-import DriveAnnotatedTextarea from "./DriveAnnotatedTextarea";
 import DriveCodeEditor, { type EditorSelectionInfo } from "./DriveCodeEditor";
 import DriveCommentMargin from "./DriveCommentMargin";
 import DriveCommentMarkdown from "./DriveCommentMarkdown";
@@ -22,35 +20,11 @@ import DriveSelectionCommentButton from "./DriveSelectionCommentButton";
 import { createDocComment } from "./drive-comments";
 import {
   applyMarkdownEdit,
-  isNativeEditorShortcut,
-  markdownShortcutAction,
   toggleTaskByIndex,
   type MarkdownActionId,
 } from "./drive-markdown-edit";
 import { imageFilesFrom, imageMarkdown, uploadMedia } from "./drive-media";
 import type { DriveEditorLiveReaders } from "./drive-editor-live";
-
-const EDITOR_PREF_KEY = "md1:editor";
-
-function getSelectionTopInContainer(
-  textarea: HTMLTextAreaElement,
-  container: HTMLElement,
-): number {
-  const end = textarea.selectionEnd;
-  const textBefore = textarea.value.slice(0, end);
-  const lineIndex = textBefore.split("\n").length - 1;
-  const lineHeight = parseFloat(getComputedStyle(textarea).lineHeight) || 32;
-  const taRect = textarea.getBoundingClientRect();
-  const containerRect = container.getBoundingClientRect();
-  const paddingTop = parseFloat(getComputedStyle(textarea).paddingTop) || 0;
-  return (
-    taRect.top -
-    containerRect.top +
-    paddingTop +
-    lineIndex * lineHeight -
-    textarea.scrollTop
-  );
-}
 
 type Form = {
   title: string;
@@ -107,7 +81,6 @@ export default function DriveEditor({
   onDragLeave: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
 }) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const contentAreaRef = useRef<HTMLDivElement>(null);
@@ -115,10 +88,7 @@ export default function DriveEditor({
 
   useEffect(() => {
     onRegisterLiveReaders({
-      getContent: () =>
-        editorViewRef.current?.state.doc.toString() ??
-        textareaRef.current?.value ??
-        null,
+      getContent: () => editorViewRef.current?.state.doc.toString() ?? null,
       getTitle: () => titleInputRef.current?.value ?? null,
     });
     return () => onRegisterLiveReaders(null);
@@ -136,27 +106,6 @@ export default function DriveEditor({
   );
   const [commentOffsetTop, setCommentOffsetTop] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
-  // Editor surface: CodeMirror (default) or the classic textarea. Persisted so
-  // the user can fall back instantly while CM6 is being validated.
-  const [useCmEditor, setUseCmEditor] = useState(true);
-  useEffect(() => {
-    try {
-      setUseCmEditor(window.localStorage.getItem(EDITOR_PREF_KEY) !== "textarea");
-    } catch {
-      /* ignore */
-    }
-  }, []);
-  const toggleEditorEngine = useCallback(() => {
-    setUseCmEditor((prev) => {
-      const next = !prev;
-      try {
-        window.localStorage.setItem(EDITOR_PREF_KEY, next ? "cm" : "textarea");
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  }, []);
   const canShare = form.isPublished && !!editingId && !!slug;
 
   useLayoutEffect(() => {
@@ -168,33 +117,6 @@ export default function DriveEditor({
     observer.observe(el);
     return () => observer.disconnect();
   }, [showPreview, form.title, form.isPublished, editingId]);
-
-  const updateSelectionUi = useCallback(() => {
-    const ta = textareaRef.current;
-    const container = contentAreaRef.current;
-    if (!ta || !container || showPreview) {
-      setSelection(null);
-      return;
-    }
-
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
-    if (start === end) {
-      setSelection(null);
-      if (!composing) setSelectionTop(0);
-      return;
-    }
-
-    const quote = ta.value.slice(start, end);
-    if (!quote.trim()) {
-      setSelection(null);
-      return;
-    }
-
-    setSelection({ start, end, quote });
-
-    setSelectionTop(getSelectionTopInContainer(ta, container));
-  }, [showPreview, composing]);
 
   const handleAnchorPositions = useCallback((positions: Record<string, number>) => {
     setAnchorPositions(positions);
@@ -215,10 +137,7 @@ export default function DriveEditor({
 
   function addComment(text: string) {
     if (!selection) return;
-    const content =
-      editorViewRef.current?.state.doc.toString() ??
-      textareaRef.current?.value ??
-      form.content;
+    const content = editorViewRef.current?.state.doc.toString() ?? form.content;
     const comment = createDocComment(
       content,
       selection.start,
@@ -230,12 +149,9 @@ export default function DriveEditor({
     setActiveCommentId(comment.id);
     setComposing(false);
     setSelection(null);
-    if (editorViewRef.current) {
-      const end = editorViewRef.current.state.selection.main.to;
-      editorViewRef.current.dispatch({ selection: { anchor: end } });
-    } else if (textareaRef.current) {
-      const end = textareaRef.current.selectionEnd;
-      textareaRef.current.setSelectionRange(end, end);
+    const view = editorViewRef.current;
+    if (view) {
+      view.dispatch({ selection: { anchor: view.state.selection.main.to } });
     }
   }
 
@@ -254,39 +170,18 @@ export default function DriveEditor({
     if (activeCommentId === id) setActiveCommentId(null);
   }
 
-  const applyFormat = useCallback(
-    (action: MarkdownActionId) => {
-      const view = editorViewRef.current;
-      if (view) {
-        const value = view.state.doc.toString();
-        const { from, to } = view.state.selection.main;
-        const result = applyMarkdownEdit(value, from, to, action);
-        view.dispatch({
-          changes: { from: 0, to: value.length, insert: result.value },
-          selection: { anchor: result.selectionStart, head: result.selectionEnd },
-        });
-        view.focus();
-        return;
-      }
-
-      const ta = textareaRef.current;
-      if (!ta || showPreview) return;
-      const result = applyMarkdownEdit(
-        ta.value,
-        ta.selectionStart,
-        ta.selectionEnd,
-        action,
-      );
-      ta.value = result.value;
-      onFormChange({ content: result.value });
-      requestAnimationFrame(() => {
-        ta.focus();
-        ta.setSelectionRange(result.selectionStart, result.selectionEnd);
-        updateSelectionUi();
-      });
-    },
-    [onFormChange, showPreview, updateSelectionUi],
-  );
+  const applyFormat = useCallback((action: MarkdownActionId) => {
+    const view = editorViewRef.current;
+    if (!view) return;
+    const value = view.state.doc.toString();
+    const { from, to } = view.state.selection.main;
+    const result = applyMarkdownEdit(value, from, to, action);
+    view.dispatch({
+      changes: { from: 0, to: value.length, insert: result.value },
+      selection: { anchor: result.selectionStart, head: result.selectionEnd },
+    });
+    view.focus();
+  }, []);
 
   const handleToggleTask = useCallback(
     (index: number) => {
@@ -295,56 +190,28 @@ export default function DriveEditor({
     [form.content, onFormChange],
   );
 
-  // Insert text at the caret. Routes to the active surface (CodeMirror or the
-  // classic uncontrolled textarea), keeping React state in sync.
-  const insertAtCursor = useCallback(
-    (text: string) => {
-      const view = editorViewRef.current;
-      if (view) {
-        const { from, to } = view.state.selection.main;
-        view.dispatch({
-          changes: { from, to, insert: text },
-          selection: { anchor: from + text.length },
-        });
-        view.focus();
-        return;
-      }
-      const ta = textareaRef.current;
-      if (!ta) return;
-      const start = ta.selectionStart;
-      const end = ta.selectionEnd;
-      const next = ta.value.slice(0, start) + text + ta.value.slice(end);
-      ta.value = next;
-      onFormChange({ content: next });
-      const pos = start + text.length;
-      requestAnimationFrame(() => {
-        ta.focus();
-        ta.setSelectionRange(pos, pos);
-      });
-    },
-    [onFormChange],
-  );
+  // Insert text at the caret in the CodeMirror view.
+  const insertAtCursor = useCallback((text: string) => {
+    const view = editorViewRef.current;
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    view.dispatch({
+      changes: { from, to, insert: text },
+      selection: { anchor: from + text.length },
+    });
+    view.focus();
+  }, []);
 
-  const replaceInEditor = useCallback(
-    (token: string, replacement: string) => {
-      const view = editorViewRef.current;
-      if (view) {
-        const value = view.state.doc.toString();
-        const idx = value.indexOf(token);
-        if (idx === -1) return;
-        view.dispatch({
-          changes: { from: idx, to: idx + token.length, insert: replacement },
-        });
-        return;
-      }
-      const ta = textareaRef.current;
-      if (!ta || !ta.value.includes(token)) return;
-      const next = ta.value.replace(token, replacement);
-      ta.value = next;
-      onFormChange({ content: next });
-    },
-    [onFormChange],
-  );
+  const replaceInEditor = useCallback((token: string, replacement: string) => {
+    const view = editorViewRef.current;
+    if (!view) return;
+    const value = view.state.doc.toString();
+    const idx = value.indexOf(token);
+    if (idx === -1) return;
+    view.dispatch({
+      changes: { from: idx, to: idx + token.length, insert: replacement },
+    });
+  }, []);
 
   // Drop a placeholder in immediately, then swap it for the real `![](url)`
   // once the upload resolves (or remove it on failure).
@@ -381,44 +248,6 @@ export default function DriveEditor({
     setSelectionTop(sel.top);
   }, []);
 
-  const handlePaste = useCallback(
-    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      const images = imageFilesFrom(event.clipboardData?.files);
-      if (images.length === 0) return;
-      event.preventDefault();
-      setMediaError(null);
-      for (const file of images) void uploadAndInsert(file);
-    },
-    [uploadAndInsert],
-  );
-
-  // Image drops are handled here and stop propagating so the Drive-level
-  // markdown importer (which creates new docs) doesn't also fire. Non-image
-  // drops (.md/.txt) fall through to bubble up to DriveManager.
-  const handleEditorDrop = useCallback(
-    (event: React.DragEvent<HTMLDivElement>) => {
-      const images = imageFilesFrom(event.dataTransfer?.files);
-      if (images.length === 0) return;
-      event.preventDefault();
-      event.stopPropagation();
-      setMediaError(null);
-      for (const file of images) void uploadAndInsert(file);
-    },
-    [uploadAndInsert],
-  );
-
-  const handleEditorDragOver = useCallback(
-    (event: React.DragEvent<HTMLDivElement>) => {
-      const hasImage = Array.from(event.dataTransfer?.items ?? []).some(
-        (item) => item.kind === "file" && item.type.startsWith("image/"),
-      );
-      if (!hasImage) return;
-      event.preventDefault();
-      event.stopPropagation();
-    },
-    [],
-  );
-
   const handlePickImage = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
@@ -432,18 +261,6 @@ export default function DriveEditor({
       for (const file of images) void uploadAndInsert(file);
     },
     [uploadAndInsert],
-  );
-
-  const handleMarkdownKeyDown = useCallback(
-    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.nativeEvent.isComposing) return;
-      if (isNativeEditorShortcut(event)) return;
-      const action = markdownShortcutAction(event);
-      if (!action) return;
-      event.preventDefault();
-      applyFormat(action);
-    },
-    [applyFormat],
   );
 
   if (editingId === null) {
@@ -501,18 +318,6 @@ export default function DriveEditor({
           {showPreview ? <Pencil size={15} /> : <Eye size={15} />}
           {showPreview ? "Edit" : "Preview"}
         </button>
-
-        {!showPreview && (
-          <button
-            type="button"
-            onClick={toggleEditorEngine}
-            title="Switch editor engine"
-            className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)]"
-          >
-            <Sparkles size={15} />
-            {useCmEditor ? "Classic editor" : "New editor"}
-          </button>
-        )}
 
         <label
           title="Folder"
@@ -676,7 +481,7 @@ export default function DriveEditor({
                   onAnchorPositions={handleAnchorPositions}
                   onToggleTask={handleToggleTask}
                 />
-              ) : useCmEditor ? (
+              ) : (
                 <DriveCodeEditor
                   key={editingId}
                   value={form.content}
@@ -691,24 +496,6 @@ export default function DriveEditor({
                   onApplyAction={applyFormat}
                   onInsertImage={handlePickImage}
                   onInsertImageFiles={handleInsertImageFiles}
-                />
-              ) : (
-                <DriveAnnotatedTextarea
-                  value={form.content}
-                  documentKey={editingId}
-                  comments={form.comments}
-                  activeCommentId={activeCommentId}
-                  textareaRef={textareaRef}
-                  onChange={(content) => onFormChange({ content })}
-                  onSelect={updateSelectionUi}
-                  onKeyDown={handleMarkdownKeyDown}
-                  onPaste={handlePaste}
-                  onDrop={handleEditorDrop}
-                  onDragOver={handleEditorDragOver}
-                  onApplyAction={applyFormat}
-                  onInsertImage={handlePickImage}
-                  onAnchorPositions={handleAnchorPositions}
-                  placeholder="Start writing…"
                 />
               )}
 
