@@ -1,6 +1,10 @@
 import { requireDriveUser } from "@/lib/drive-auth-server";
 import { isAdminEmail } from "@/lib/admin";
-import { listMailWorkspace } from "@/lib/mail-server";
+import {
+  emptyMailWorkspace,
+  listMailWorkspace,
+  mailWorkspaceLoadError,
+} from "@/lib/mail-server";
 import MailClient from "./MailClient";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +16,9 @@ export default async function MailPage({
 }) {
   const user = await requireDriveUser();
   const params = await searchParams;
-  const workspace = await listMailWorkspace(user.id);
+  const workspace = await listMailWorkspace(user.id).catch((err) =>
+    emptyMailWorkspace(mailWorkspaceLoadError(err)),
+  );
   const initialAccountId =
     typeof params.account === "string" ? params.account : null;
   const oauthError = typeof params.error === "string" ? params.error : null;

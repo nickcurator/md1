@@ -26,6 +26,52 @@ export const GMAIL_SCOPES = [
 const MAIL_TABLE_SETUP_ERROR =
   "Mail database is not set up yet. Apply supabase/migrations/034_mail_client.sql.";
 
+export function emptyMailWorkspace(setupError: string): MailWorkspace {
+  return {
+    accounts: [],
+    folders: [],
+    threads: [],
+    messages: [],
+    setupError,
+  };
+}
+
+export function mailWorkspaceLoadError(err: unknown): string {
+  if (!err || typeof err !== "object") {
+    return "Mail could not load. Check the server logs.";
+  }
+  const error = err as {
+    code?: unknown;
+    message?: unknown;
+    details?: unknown;
+    hint?: unknown;
+  };
+  const code = typeof error.code === "string" ? error.code : "";
+  const message = [
+    error.message,
+    error.details,
+    error.hint,
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ");
+  const lowerMessage = message.toLowerCase();
+
+  if (
+    code === "42P01" ||
+    code === "42703" ||
+    code.startsWith("PGRST") ||
+    lowerMessage.includes("mail_accounts") ||
+    lowerMessage.includes("mail_folders") ||
+    lowerMessage.includes("mail_threads") ||
+    lowerMessage.includes("mail_messages") ||
+    (lowerMessage.includes("schema cache") && lowerMessage.includes("mail_"))
+  ) {
+    return MAIL_TABLE_SETUP_ERROR;
+  }
+
+  return "Mail could not load. Check the server logs.";
+}
+
 type MailAccountRow = {
   id: string;
   owner_id: string;
@@ -495,15 +541,11 @@ export async function listMailWorkspace(
     foldersRes.error,
     threadsRes.error,
     messagesRes.error,
-  ].find((error) => error?.code === "42P01");
+  ]
+    .map(mailWorkspaceLoadError)
+    .find((message) => message === MAIL_TABLE_SETUP_ERROR);
   if (setupError) {
-    return {
-      accounts: [],
-      folders: [],
-      threads: [],
-      messages: [],
-      setupError: MAIL_TABLE_SETUP_ERROR,
-    };
+    return emptyMailWorkspace(setupError);
   }
   if (accountsRes.error) throw accountsRes.error;
   if (foldersRes.error) throw foldersRes.error;
