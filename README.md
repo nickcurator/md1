@@ -17,6 +17,7 @@ npm run dev                  # http://localhost:3001
 | Path | Purpose |
 |------|---------|
 | `/` | Editor |
+| `/mail` | Built-in mail client |
 | `/login` | Google sign-in |
 | `/settings` | API tokens + integration examples |
 | `/whats-new` | Product changelog |
@@ -24,12 +25,21 @@ npm run dev                  # http://localhost:3001
 | `/d/[slug]` | Public published doc |
 | `/mcp` | Hosted MCP (Streamable HTTP, Bearer `m1_…`) |
 | `/api/docs` | CRUD API (cookie or `Bearer m1_…`) |
+| `/api/mail/*` | Mail OAuth, sync, and message actions |
 | `/api/tokens` | Manage API tokens (cookie only) |
 | `/api/auth/*` | OAuth |
 
 ## API access
 
 See [docs/API.md](docs/API.md) and [docs/MCP.md](docs/MCP.md) — Bearer tokens for HTTP; **`npx md1-mcp`** for agents (no repo clone).
+
+## Mail
+
+`/mail` supports multiple Gmail accounts through a separate Google OAuth flow.
+Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
+`MAIL_TOKEN_ENCRYPTION_KEY`; add these authorized redirect URIs:
+`http://localhost:3001/api/mail/google/callback` and
+`https://md1.space/api/mail/google/callback`.
 
 ## Deploy (Vercel)
 

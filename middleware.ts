@@ -62,10 +62,12 @@ export const config = {
   matcher: [
     "/",
     "/settings",
+    "/mail/:path*",
     "/whats-new",
     "/mcp",
     "/admin/:path*",
     "/api/docs/:path*",
+    "/api/mail/:path*",
     "/api/tokens/:path*",
   ],
 };
