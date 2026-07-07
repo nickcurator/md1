@@ -29,6 +29,7 @@ const FULL_GMAIL_SCOPE = "https://mail.google.com/";
 const MAX_EMPTY_TRASH_MESSAGES = 500;
 const GMAIL_BATCH_DELETE_CHUNK_SIZE = 500;
 const GMAIL_SYNC_PAGE_SIZE = 50;
+const GMAIL_SEARCH_PAGE_SIZE = 50;
 const MAIL_WORKSPACE_THREAD_LIMIT = 500;
 const MAIL_WORKSPACE_MESSAGE_LIMIT = 2000;
 const DEFAULT_GMAIL_CURSOR_KEY = "ALL";
@@ -1083,13 +1084,22 @@ async function listGmailMessagesPage(
   input: {
     providerFolderId?: string | null;
     pageToken?: string | null;
+    query?: string | null;
+    maxResults?: number;
   } = {},
 ): Promise<GmailMessageList> {
   const params = new URLSearchParams({
-    maxResults: String(GMAIL_SYNC_PAGE_SIZE),
+    maxResults: String(input.maxResults ?? GMAIL_SYNC_PAGE_SIZE),
   });
   if (input.providerFolderId) params.set("labelIds", input.providerFolderId);
   if (input.pageToken) params.set("pageToken", input.pageToken);
+  if (input.query) params.set("q", input.query);
+  if (
+    input.query &&
+    (input.providerFolderId === "TRASH" || input.providerFolderId === "SPAM")
+  ) {
+    params.set("includeSpamTrash", "true");
+  }
   return googleJson<GmailMessageList>(
     accessToken,
     `https://gmail.googleapis.com/gmail/v1/users/me/messages?${params.toString()}`,
@@ -1410,6 +1420,84 @@ export async function syncGmailAccount(input: {
     hasMore,
     providerFolderId,
   };
+}
+
+export type GmailSearchResult = {
+  workspace: MailWorkspace;
+  loadedCount: number;
+  providerFolderId: string | null;
+  query: string;
+};
+
+export async function searchGmailMessages(input: {
+  ownerId: string;
+  accountId: string;
+  query: string;
+  providerFolderId?: string | null;
+}): Promise<GmailSearchResult> {
+  const query = input.query.trim();
+  if (!query) throw new Error("Search query is required");
+  if (query.length > 500) throw new Error("Search query is too long");
+
+  const account = await getPrivateAccount(input.ownerId, input.accountId);
+  if (!account || account.provider !== "gmail") {
+    throw new Error("Mail account not found");
+  }
+  const providerFolderId =
+    typeof input.providerFolderId === "string" && input.providerFolderId.trim()
+      ? input.providerFolderId.trim()
+      : null;
+
+  try {
+    const accessToken = await gmailAccessToken(account);
+    const folderIdByProviderId = await syncGmailFolders({
+      ownerId: input.ownerId,
+      accountId: account.id,
+      accessToken,
+    });
+    const listed = await listGmailMessagesPage(accessToken, {
+      providerFolderId,
+      query,
+      maxResults: GMAIL_SEARCH_PAGE_SIZE,
+    });
+    const detailed = await fetchGmailMessagesLimited(
+      accessToken,
+      listed.messages ?? [],
+    );
+    await upsertParsedGmailMessages({
+      ownerId: input.ownerId,
+      accountId: account.id,
+      messages: detailed.map((message) =>
+        parseGmailMessage(message, folderIdByProviderId),
+      ),
+    });
+    const profile = await fetchGmailProfile(accessToken);
+    const syncState = jsonObject(account.sync_state);
+    await updateAccountStatus(account.id, input.ownerId, {
+      status: "connected",
+      error: null,
+      last_synced_at: new Date().toISOString(),
+      sync_state: {
+        ...syncState,
+        ...(profile.historyId ? { historyId: profile.historyId } : {}),
+        lastSearchQuery: query,
+        lastSearchProviderFolderId: providerFolderId,
+        lastSearchCount: detailed.length,
+      },
+    });
+    return {
+      workspace: await listMailWorkspace(input.ownerId),
+      loadedCount: detailed.length,
+      providerFolderId,
+      query,
+    };
+  } catch (err) {
+    await updateAccountStatus(account.id, input.ownerId, {
+      status: "error",
+      error: err instanceof Error ? err.message : "Search failed",
+    });
+    throw err;
+  }
 }
 
 function replySubject(subject: string): string {

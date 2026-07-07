@@ -342,6 +342,13 @@ type MailSyncResponse = {
   error?: string;
 };
 
+type MailSearchResponse = {
+  workspace?: MailWorkspace;
+  loadedCount?: number;
+  query?: string;
+  error?: string;
+};
+
 type MailSendResponse = {
   workspace?: MailWorkspace;
   message?: MailMessage;
@@ -656,6 +663,33 @@ export default function MailClient({
   const loadingMore = activeLoadMoreKey !== null && pendingAction === activeLoadMoreKey;
   const canLoadMore = hasMoreSyncedMail(selectedAccount, activeFolder);
   const normalizedQuery = query.trim().toLowerCase();
+  const trimmedQuery = query.trim();
+  const activeSearchKey =
+    selectedAccount && trimmedQuery
+      ? `search:${selectedAccount.id}:${gmailSyncCursorKey(activeFolder)}:${trimmedQuery}`
+      : null;
+  const searchingMail =
+    activeSearchKey !== null && pendingAction === activeSearchKey;
+
+  const messageSearchTextByThreadId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const message of mailWorkspace.messages) {
+      if (!message.threadId) continue;
+      const value = [
+        message.subject,
+        message.snippet,
+        message.bodyText,
+        message.fromName,
+        message.fromEmail,
+        message.toRecipients.map(formatRecipient).join(" "),
+        message.ccRecipients.map(formatRecipient).join(" "),
+      ]
+        .join(" ")
+        .toLowerCase();
+      map.set(message.threadId, `${map.get(message.threadId) ?? ""} ${value}`);
+    }
+    return map;
+  }, [mailWorkspace.messages]);
 
   const visibleThreads = useMemo(() => {
     if (!selectedAccount) return [];
@@ -678,12 +712,19 @@ export default function MailClient({
         thread.subject,
         thread.snippet,
         thread.participants.map(formatRecipient).join(" "),
+        messageSearchTextByThreadId.get(thread.id) ?? "",
       ]
         .join(" ")
         .toLowerCase();
       return haystack.includes(normalizedQuery);
     });
-  }, [activeFolder, normalizedQuery, selectedAccount, mailWorkspace.threads]);
+  }, [
+    activeFolder,
+    normalizedQuery,
+    selectedAccount,
+    mailWorkspace.threads,
+    messageSearchTextByThreadId,
+  ]);
 
   useEffect(() => {
     if (!visibleThreads.length) {
@@ -847,6 +888,34 @@ export default function MailClient({
       } else {
         setSyncingAccountId(null);
       }
+    }
+  }
+
+  async function searchMail() {
+    if (!selectedAccount || !trimmedQuery || !activeSearchKey) return;
+    setPendingAction(activeSearchKey);
+    setUiError(null);
+    setUiNotice(null);
+    try {
+      const res = await fetch("/api/mail/search", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          accountId: selectedAccount.id,
+          providerFolderId: activeFolder?.providerFolderId ?? null,
+          query: trimmedQuery,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as MailSearchResponse;
+      if (!res.ok) throw new Error(data.error || `Search failed (${res.status})`);
+      if (data.workspace) setMailWorkspace(data.workspace);
+      setUiNotice(
+        `Found ${data.loadedCount ?? 0} Gmail result${(data.loadedCount ?? 0) === 1 ? "" : "s"}.`,
+      );
+    } catch (err) {
+      setUiError(err instanceof Error ? err.message : "Search failed");
+    } finally {
+      setPendingAction(null);
     }
   }
 
@@ -1157,7 +1226,7 @@ export default function MailClient({
                   {activeFolder && (
                     <p className="truncate text-[11px] text-[var(--muted)]">
                       {normalizedQuery
-                        ? `${visibleThreads.length} synced thread${visibleThreads.length === 1 ? "" : "s"} match search`
+                        ? `${visibleThreads.length} loaded thread${visibleThreads.length === 1 ? "" : "s"} match`
                         : `Gmail total ${activeFolder.totalCount} · ${visibleThreads.length} synced thread${visibleThreads.length === 1 ? "" : "s"} shown`}
                     </p>
                   )}
@@ -1212,9 +1281,28 @@ export default function MailClient({
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void searchMail();
+                }
+              }}
               placeholder="Search mail"
               className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--muted)]"
             />
+            <button
+              type="button"
+              title="Search Gmail"
+              disabled={!trimmedQuery || !!pendingAction}
+              onClick={() => void searchMail()}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--bg)] hover:text-[var(--fg)] disabled:opacity-50"
+            >
+              {searchingMail ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Search size={14} />
+              )}
+            </button>
           </label>
           {uiError && (
             <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
