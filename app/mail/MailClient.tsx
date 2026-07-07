@@ -6,15 +6,19 @@ import {
   Archive,
   Check,
   FileText,
+  Forward,
   Inbox,
   Loader2,
   Mail,
+  PencilLine,
   Plus,
   RefreshCw,
+  Reply,
   Search,
   Send,
   Star,
   Trash2,
+  X,
 } from "lucide-react";
 import AppLogo from "@/components/AppLogo";
 import type { DriveUser } from "@/lib/drive-users-server";
@@ -28,6 +32,7 @@ import {
   type MailFolderKind,
   type MailMessageAction,
   type MailMessage,
+  type MailRecipient,
   type MailThread,
   type MailWorkspace,
 } from "@/lib/mail";
@@ -337,6 +342,26 @@ type MailSyncResponse = {
   error?: string;
 };
 
+type MailSendResponse = {
+  workspace?: MailWorkspace;
+  message?: MailMessage;
+  thread?: MailThread | null;
+  error?: string;
+};
+
+type ComposeMode = "compose" | "reply" | "forward";
+
+type ComposeState = {
+  mode: ComposeMode;
+  accountId: string;
+  to: string;
+  cc: string;
+  bcc: string;
+  subject: string;
+  bodyText: string;
+  replyToMessageId: string | null;
+};
+
 function primaryFolderIdForLabels(
   workspace: MailWorkspace,
   accountId: string,
@@ -371,6 +396,65 @@ function latestMessage(messages: MailMessage[]): MailMessage | null {
       : 0;
     return messageTime >= latestTime ? message : latest;
   }, null);
+}
+
+function recipientInput(recipient: MailRecipient): string {
+  if (!recipient.name) return recipient.email;
+  return `${recipient.name} <${recipient.email}>`;
+}
+
+function replySubject(subject: string): string {
+  const clean = subject.trim() || "(no subject)";
+  return /^re:/i.test(clean) ? clean : `Re: ${clean}`;
+}
+
+function forwardSubject(subject: string): string {
+  const clean = subject.trim() || "(no subject)";
+  return /^fwd?:/i.test(clean) ? clean : `Fwd: ${clean}`;
+}
+
+function quotedMessageBody(message: MailMessage): string {
+  const body = cleanMailText(message.bodyText || message.snippet)
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n")
+    .slice(0, 12000);
+  const sentAt = message.receivedAt
+    ? new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(message.receivedAt))
+    : "";
+  return [
+    "",
+    "",
+    `On ${sentAt || "this date"}, ${messageSender(message)} wrote:`,
+    body,
+  ].join("\n");
+}
+
+function forwardedMessageBody(message: MailMessage): string {
+  const body = cleanMailText(message.bodyText || message.snippet).slice(0, 16000);
+  return [
+    "",
+    "",
+    "---------- Forwarded message ----------",
+    `From: ${messageSender(message)}${
+      message.fromEmail ? ` <${message.fromEmail}>` : ""
+    }`,
+    `Date: ${
+      message.receivedAt
+        ? new Intl.DateTimeFormat(undefined, {
+            dateStyle: "medium",
+            timeStyle: "short",
+          }).format(new Date(message.receivedAt))
+        : ""
+    }`,
+    `Subject: ${message.subject}`,
+    `To: ${messageRecipients(message.toRecipients)}`,
+    "",
+    body,
+  ].join("\n");
 }
 
 function applyOptimisticMessageAction(
@@ -474,6 +558,8 @@ export default function MailClient({
   const [trashDialogAccountId, setTrashDialogAccountId] = useState<string | null>(
     null,
   );
+  const [compose, setCompose] = useState<ComposeState | null>(null);
+  const [showCcBcc, setShowCcBcc] = useState(false);
 
   const selectedAccount =
     mailWorkspace.accounts.find((account) => account.id === selectedAccountId) ??
@@ -624,6 +710,98 @@ export default function MailClient({
     : [];
   const selectedMessage = selectedMessages[selectedMessages.length - 1] ?? null;
 
+  function openCompose(accountId = selectedAccount?.id ?? "") {
+    if (!accountId) return;
+    setShowCcBcc(false);
+    setCompose({
+      mode: "compose",
+      accountId,
+      to: "",
+      cc: "",
+      bcc: "",
+      subject: "",
+      bodyText: "",
+      replyToMessageId: null,
+    });
+  }
+
+  function openReply() {
+    if (!selectedAccount || !selectedMessage?.fromEmail) return;
+    setShowCcBcc(false);
+    setCompose({
+      mode: "reply",
+      accountId: selectedAccount.id,
+      to: recipientInput({
+        email: selectedMessage.fromEmail,
+        name: selectedMessage.fromName,
+      }),
+      cc: "",
+      bcc: "",
+      subject: replySubject(selectedMessage.subject),
+      bodyText: quotedMessageBody(selectedMessage),
+      replyToMessageId: selectedMessage.id,
+    });
+  }
+
+  function openForward() {
+    if (!selectedAccount || !selectedMessage) return;
+    setShowCcBcc(false);
+    setCompose({
+      mode: "forward",
+      accountId: selectedAccount.id,
+      to: "",
+      cc: "",
+      bcc: "",
+      subject: forwardSubject(selectedMessage.subject),
+      bodyText: forwardedMessageBody(selectedMessage),
+      replyToMessageId: null,
+    });
+  }
+
+  async function sendCompose() {
+    if (!compose) return;
+    const accountId = compose.accountId;
+    const mode = compose.mode;
+    setPendingAction("send-mail");
+    setUiError(null);
+    setUiNotice(null);
+    try {
+      const res = await fetch("/api/mail/send", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          accountId,
+          to: compose.to,
+          cc: compose.cc,
+          bcc: compose.bcc,
+          subject: compose.subject,
+          bodyText: compose.bodyText,
+          replyToMessageId: compose.replyToMessageId,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as MailSendResponse;
+      if (!res.ok) throw new Error(data.error || `Send failed (${res.status})`);
+      if (data.workspace) setMailWorkspace(data.workspace);
+      setSelectedAccountId(accountId);
+      if (mode === "compose" || mode === "forward") {
+        const sentFolder =
+          data.workspace?.folders.find(
+            (folder) =>
+              folder.accountId === accountId &&
+              folder.providerFolderId === "SENT",
+          ) ?? null;
+        if (sentFolder) setSelectedFolderId(sentFolder.id);
+      }
+      if (data.thread) setSelectedThreadId(data.thread.id);
+      setCompose(null);
+      setUiNotice("Sent.");
+    } catch (err) {
+      setUiError(err instanceof Error ? err.message : "Send failed");
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
   async function syncAccount(
     accountId: string,
     options: {
@@ -773,6 +951,17 @@ export default function MailClient({
       : activeFolder
         ? folderKindLabel(activeFolder.kind)
         : "All mail";
+  const composeAccount = compose
+    ? mailWorkspace.accounts.find((account) => account.id === compose.accountId) ??
+      null
+    : null;
+  const sendingMail = pendingAction === "send-mail";
+  const composeTitle =
+    compose?.mode === "reply"
+      ? "Reply"
+      : compose?.mode === "forward"
+        ? "Forward"
+        : "New message";
 
   function renderFolderButton(folder: MailFolder) {
     const selected = activeFolderId === folder.id;
@@ -977,6 +1166,14 @@ export default function MailClient({
             </div>
             {selectedAccount && (
               <div className="flex shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  title="Compose"
+                  onClick={() => openCompose(selectedAccount.id)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
+                >
+                  <PencilLine size={16} />
+                </button>
                 {activeFolder?.providerFolderId === "TRASH" && (
                   <button
                     type="button"
@@ -1169,6 +1366,24 @@ export default function MailClient({
             <div className="flex shrink-0 items-center gap-1">
               <button
                 type="button"
+                title="Reply"
+                disabled={!!pendingAction || !selectedMessage.fromEmail}
+                onClick={openReply}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
+              >
+                <Reply size={16} />
+              </button>
+              <button
+                type="button"
+                title="Forward"
+                disabled={!!pendingAction}
+                onClick={openForward}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
+              >
+                <Forward size={16} />
+              </button>
+              <button
+                type="button"
                 title={selectedMessage.starred ? "Unstar" : "Star"}
                 disabled={!!pendingAction}
                 onClick={() =>
@@ -1272,6 +1487,167 @@ export default function MailClient({
           )}
         </div>
       </main>
+      {compose && (
+        <div
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="compose-title"
+          className="fixed bottom-4 right-4 z-40 flex max-h-[calc(100dvh-2rem)] w-[min(560px,calc(100vw-2rem))] flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg)] shadow-2xl"
+        >
+          <div className="flex h-11 shrink-0 items-center justify-between border-b border-[var(--border)] px-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <PencilLine size={15} className="shrink-0 text-[var(--muted)]" />
+              <h2 id="compose-title" className="truncate text-sm font-semibold">
+                {composeTitle}
+              </h2>
+            </div>
+            <button
+              type="button"
+              title="Close"
+              disabled={sendingMail}
+              onClick={() => setCompose(null)}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="border-b border-[var(--border)] px-3 py-2">
+              <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
+                <span className="w-12 shrink-0">From</span>
+                <select
+                  value={compose.accountId}
+                  disabled={sendingMail || compose.mode === "reply"}
+                  onChange={(event) =>
+                    setCompose((current) =>
+                      current
+                        ? { ...current, accountId: event.target.value }
+                        : current,
+                    )
+                  }
+                  className="min-w-0 flex-1 rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1.5 text-sm text-[var(--fg)] outline-none disabled:opacity-70"
+                >
+                  {mailWorkspace.accounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {accountName(account)} · {account.email}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="border-b border-[var(--border)] px-3 py-2">
+              <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
+                <span className="w-12 shrink-0">To</span>
+                <input
+                  value={compose.to}
+                  disabled={sendingMail}
+                  onChange={(event) =>
+                    setCompose((current) =>
+                      current ? { ...current, to: event.target.value } : current,
+                    )
+                  }
+                  className="min-w-0 flex-1 bg-transparent text-sm text-[var(--fg)] outline-none placeholder:text-[var(--muted)]"
+                  placeholder="name@example.com"
+                />
+                <button
+                  type="button"
+                  disabled={sendingMail}
+                  onClick={() => setShowCcBcc((value) => !value)}
+                  className="rounded-md px-2 py-1 text-xs text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
+                >
+                  Cc/Bcc
+                </button>
+              </label>
+            </div>
+            {showCcBcc && (
+              <>
+                <div className="border-b border-[var(--border)] px-3 py-2">
+                  <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
+                    <span className="w-12 shrink-0">Cc</span>
+                    <input
+                      value={compose.cc}
+                      disabled={sendingMail}
+                      onChange={(event) =>
+                        setCompose((current) =>
+                          current
+                            ? { ...current, cc: event.target.value }
+                            : current,
+                        )
+                      }
+                      className="min-w-0 flex-1 bg-transparent text-sm text-[var(--fg)] outline-none placeholder:text-[var(--muted)]"
+                      placeholder="name@example.com"
+                    />
+                  </label>
+                </div>
+                <div className="border-b border-[var(--border)] px-3 py-2">
+                  <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
+                    <span className="w-12 shrink-0">Bcc</span>
+                    <input
+                      value={compose.bcc}
+                      disabled={sendingMail}
+                      onChange={(event) =>
+                        setCompose((current) =>
+                          current
+                            ? { ...current, bcc: event.target.value }
+                            : current,
+                        )
+                      }
+                      className="min-w-0 flex-1 bg-transparent text-sm text-[var(--fg)] outline-none placeholder:text-[var(--muted)]"
+                      placeholder="name@example.com"
+                    />
+                  </label>
+                </div>
+              </>
+            )}
+            <div className="border-b border-[var(--border)] px-3 py-2">
+              <input
+                value={compose.subject}
+                disabled={sendingMail}
+                onChange={(event) =>
+                  setCompose((current) =>
+                    current
+                      ? { ...current, subject: event.target.value }
+                      : current,
+                  )
+                }
+                className="w-full bg-transparent text-sm font-medium text-[var(--fg)] outline-none placeholder:text-[var(--muted)]"
+                placeholder="Subject"
+              />
+            </div>
+            <textarea
+              value={compose.bodyText}
+              disabled={sendingMail}
+              onChange={(event) =>
+                setCompose((current) =>
+                  current ? { ...current, bodyText: event.target.value } : current,
+                )
+              }
+              className="min-h-[280px] w-full resize-none bg-transparent px-3 py-3 text-sm leading-6 text-[var(--fg)] outline-none placeholder:text-[var(--muted)] disabled:opacity-70"
+              placeholder=""
+            />
+          </div>
+
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--border)] px-3 py-2">
+            <div className="min-w-0 truncate text-xs text-[var(--muted)]">
+              {composeAccount?.email ?? ""}
+            </div>
+            <button
+              type="button"
+              disabled={sendingMail || !compose.to.trim() || !compose.accountId}
+              onClick={() => void sendCompose()}
+              className="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--fg)] px-3 text-sm font-medium text-[var(--bg)] hover:opacity-90 disabled:opacity-50"
+            >
+              {sendingMail ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : (
+                <Send size={15} />
+              )}
+              Send
+            </button>
+          </div>
+        </div>
+      )}
       {trashDialogAccount && (
         <div
           role="dialog"

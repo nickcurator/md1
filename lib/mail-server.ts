@@ -262,6 +262,12 @@ type ParsedGmailMessage = {
   labels: string[];
 };
 
+type GmailSendResponse = {
+  id: string;
+  threadId: string;
+  labelIds?: string[];
+};
+
 function jsonObject(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === "object" && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)
@@ -868,6 +874,75 @@ function parseAddressList(value: string): MailRecipient[] {
     .filter((item): item is MailRecipient => item !== null);
 }
 
+function normalizeRecipientInput(value: string): MailRecipient[] {
+  return parseAddressList(value)
+    .map((recipient) => ({
+      email: recipient.email.trim(),
+      name: recipient.name.trim(),
+    }))
+    .filter((recipient) => /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(recipient.email));
+}
+
+function sanitizeHeaderValue(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+
+function encodeHeaderValue(value: string): string {
+  const clean = sanitizeHeaderValue(value);
+  if (!/[^\x20-\x7E]/.test(clean)) return clean;
+  return `=?UTF-8?B?${Buffer.from(clean, "utf8").toString("base64")}?=`;
+}
+
+function formatOutgoingAddress(recipient: MailRecipient): string {
+  const email = sanitizeHeaderValue(recipient.email);
+  const name = sanitizeHeaderValue(recipient.name);
+  if (!name) return email;
+  if (/[^\x20-\x7E]/.test(name)) return `${encodeHeaderValue(name)} <${email}>`;
+  const escaped = name.replace(/["\\]/g, "\\$&");
+  return `"${escaped}" <${email}>`;
+}
+
+function normalizeBodyText(value: string): string {
+  return value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n/g, "\r\n");
+}
+
+function base64Url(value: string): string {
+  return Buffer.from(value, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function buildRfc822Message(input: {
+  from: MailRecipient;
+  to: MailRecipient[];
+  cc: MailRecipient[];
+  bcc: MailRecipient[];
+  subject: string;
+  bodyText: string;
+  inReplyTo?: string | null;
+  references?: string | null;
+}): string {
+  const headers = [
+    `From: ${formatOutgoingAddress(input.from)}`,
+    `To: ${input.to.map(formatOutgoingAddress).join(", ")}`,
+    ...(input.cc.length > 0
+      ? [`Cc: ${input.cc.map(formatOutgoingAddress).join(", ")}`]
+      : []),
+    ...(input.bcc.length > 0
+      ? [`Bcc: ${input.bcc.map(formatOutgoingAddress).join(", ")}`]
+      : []),
+    `Subject: ${encodeHeaderValue(input.subject || "(no subject)")}`,
+    "MIME-Version: 1.0",
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: 8bit",
+    ...(input.inReplyTo ? [`In-Reply-To: ${sanitizeHeaderValue(input.inReplyTo)}`] : []),
+    ...(input.references ? [`References: ${sanitizeHeaderValue(input.references)}`] : []),
+  ];
+  return `${headers.join("\r\n")}\r\n\r\n${normalizeBodyText(input.bodyText)}`;
+}
+
 function primaryFolderId(
   labels: string[],
   folderIdByProviderId: Map<string, string>,
@@ -1027,6 +1102,7 @@ async function upsertParsedGmailMessages(input: {
   messages: ParsedGmailMessage[];
 }): Promise<void> {
   const db = createAdminClient();
+  const affectedThreadIds = new Set<string>();
   const sorted = [...input.messages].sort((a, b) => {
     const aTime = a.receivedAt ? new Date(a.receivedAt).getTime() : 0;
     const bTime = b.receivedAt ? new Date(b.receivedAt).getTime() : 0;
@@ -1056,6 +1132,7 @@ async function upsertParsedGmailMessages(input: {
       .select("id")
       .single();
     if (threadError) throw threadError;
+    affectedThreadIds.add((threadRow as { id: string }).id);
 
     const { error: messageError } = await db.from("mail_messages").upsert(
       {
@@ -1085,6 +1162,10 @@ async function upsertParsedGmailMessages(input: {
       { onConflict: "account_id,provider_message_id" },
     );
     if (messageError) throw messageError;
+  }
+
+  for (const threadId of affectedThreadIds) {
+    await refreshOrRemoveThread({ ownerId: input.ownerId, threadId });
   }
 }
 
@@ -1331,6 +1412,209 @@ export async function syncGmailAccount(input: {
   };
 }
 
+function replySubject(subject: string): string {
+  const clean = subject.trim() || "(no subject)";
+  return /^re:/i.test(clean) ? clean : `Re: ${clean}`;
+}
+
+async function gmailSendRaw(input: {
+  accessToken: string;
+  raw: string;
+  threadId?: string | null;
+}): Promise<GmailSendResponse> {
+  const res = await fetch(
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${input.accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        raw: base64Url(input.raw),
+        ...(input.threadId ? { threadId: input.threadId } : {}),
+      }),
+    },
+  );
+  const data = (await res.json().catch(() => null)) as
+    | (GmailSendResponse & { error?: { message?: string } })
+    | null;
+  if (!res.ok || !data?.id) {
+    throw new Error(
+      data?.error?.message || `Gmail send failed (${res.status})`,
+    );
+  }
+  return data;
+}
+
+async function getLocalMailMessageResult(input: {
+  ownerId: string;
+  accountId: string;
+  providerMessageId: string;
+}): Promise<{ message: MailMessage; thread: MailThread | null }> {
+  const db = createAdminClient();
+  const { data: messageData, error: messageError } = await db
+    .from("mail_messages")
+    .select("*")
+    .eq("owner_id", input.ownerId)
+    .eq("account_id", input.accountId)
+    .eq("provider_message_id", input.providerMessageId)
+    .single();
+  if (messageError) throw messageError;
+
+  const message = messageData as MailMessageRow;
+  let thread: MailThread | null = null;
+  if (message.thread_id) {
+    const { data: threadData, error: threadError } = await db
+      .from("mail_threads")
+      .select("*")
+      .eq("owner_id", input.ownerId)
+      .eq("id", message.thread_id)
+      .maybeSingle();
+    if (threadError) throw threadError;
+    thread = threadData ? mapThread(threadData as MailThreadRow) : null;
+  }
+
+  return {
+    message: mapMessage(message),
+    thread,
+  };
+}
+
+export type MailSendResult = {
+  workspace: MailWorkspace;
+  message: MailMessage;
+  thread: MailThread | null;
+};
+
+export async function sendGmailMessage(input: {
+  ownerId: string;
+  accountId: string;
+  to: string;
+  cc?: string | null;
+  bcc?: string | null;
+  subject: string;
+  bodyText: string;
+  replyToMessageId?: string | null;
+}): Promise<MailSendResult> {
+  const to = normalizeRecipientInput(input.to);
+  const cc = normalizeRecipientInput(input.cc ?? "");
+  const bcc = normalizeRecipientInput(input.bcc ?? "");
+  if (to.length === 0) throw new Error("Add at least one recipient.");
+  if (input.bodyText.length > 200_000) {
+    throw new Error("Message body is too long.");
+  }
+
+  const account = await getPrivateAccount(input.ownerId, input.accountId);
+  if (!account || account.provider !== "gmail") {
+    throw new Error("Mail account not found");
+  }
+  const accessToken = await gmailAccessToken(account);
+  let threadProviderId: string | null = null;
+  let inReplyTo: string | null = null;
+  let references: string | null = null;
+  let subject = input.subject.trim();
+
+  if (input.replyToMessageId) {
+    const db = createAdminClient();
+    const { data: replyMessageData, error: replyMessageError } = await db
+      .from("mail_messages")
+      .select("*")
+      .eq("owner_id", input.ownerId)
+      .eq("account_id", account.id)
+      .eq("id", input.replyToMessageId)
+      .maybeSingle();
+    if (replyMessageError) throw replyMessageError;
+    if (!replyMessageData) throw new Error("Reply message not found");
+
+    const replyMessage = replyMessageData as MailMessageRow;
+    subject = subject || replySubject(replyMessage.subject);
+
+    if (replyMessage.thread_id) {
+      const { data: threadData, error: threadError } = await db
+        .from("mail_threads")
+        .select("*")
+        .eq("owner_id", input.ownerId)
+        .eq("id", replyMessage.thread_id)
+        .maybeSingle();
+      if (threadError) throw threadError;
+      threadProviderId = threadData
+        ? (threadData as MailThreadRow).provider_thread_id
+        : null;
+    }
+
+    const original = await fetchGmailMessageWithRetry(
+      accessToken,
+      replyMessage.provider_message_id,
+    );
+    const originalMessageId = header(original.payload?.headers, "Message-ID");
+    const originalReferences = header(original.payload?.headers, "References");
+    if (originalMessageId) {
+      inReplyTo = originalMessageId;
+      references = [originalReferences, originalMessageId]
+        .filter(Boolean)
+        .join(" ");
+    }
+  }
+
+  const folderIdByProviderId = await syncGmailFolders({
+    ownerId: input.ownerId,
+    accountId: account.id,
+    accessToken,
+  });
+  const raw = buildRfc822Message({
+    from: {
+      email: account.email,
+      name: account.display_name,
+    },
+    to,
+    cc,
+    bcc,
+    subject: subject || "(no subject)",
+    bodyText: input.bodyText,
+    inReplyTo,
+    references,
+  });
+  const sent = await gmailSendRaw({
+    accessToken,
+    raw,
+    threadId: threadProviderId,
+  });
+  const detailed = await fetchGmailMessageWithRetry(accessToken, sent.id);
+  await upsertParsedGmailMessages({
+    ownerId: input.ownerId,
+    accountId: account.id,
+    messages: [parseGmailMessage(detailed, folderIdByProviderId)],
+  });
+  await syncGmailFolders({
+    ownerId: input.ownerId,
+    accountId: account.id,
+    accessToken,
+  });
+  const profile = await fetchGmailProfile(accessToken);
+  const syncState = jsonObject(account.sync_state);
+  await updateAccountStatus(account.id, input.ownerId, {
+    status: "connected",
+    error: null,
+    last_synced_at: new Date().toISOString(),
+    sync_state: {
+      ...syncState,
+      ...(profile.historyId ? { historyId: profile.historyId } : {}),
+    },
+  });
+
+  const sentLocal = await getLocalMailMessageResult({
+    ownerId: input.ownerId,
+    accountId: account.id,
+    providerMessageId: sent.id,
+  });
+  return {
+    workspace: await listMailWorkspace(input.ownerId),
+    message: sentLocal.message,
+    thread: sentLocal.thread,
+  };
+}
+
 async function gmailModify(
   accessToken: string,
   providerMessageId: string,
@@ -1456,11 +1740,11 @@ async function refreshOrRemoveThread(input: {
     .select("*")
     .eq("owner_id", input.ownerId)
     .eq("thread_id", input.threadId)
-    .order("received_at", { ascending: false, nullsFirst: false })
-    .limit(1);
+    .order("received_at", { ascending: false, nullsFirst: false });
   if (remainingError) throw remainingError;
 
-  const latest = (remaining as MailMessageRow[])[0];
+  const messages = remaining as MailMessageRow[];
+  const latest = messages[0];
   if (!latest) {
     const { error: deleteThreadError } = await db
       .from("mail_threads")
@@ -1471,16 +1755,24 @@ async function refreshOrRemoveThread(input: {
     return;
   }
 
+  const labels = [
+    ...new Set(messages.flatMap((message) => stringArray(message.labels))),
+  ];
+  const folderIds = await listMailFolderIds({
+    ownerId: input.ownerId,
+    accountId: latest.account_id,
+  });
+
   const { error: updateThreadError } = await db
     .from("mail_threads")
     .update({
-      folder_id: latest.folder_id,
+      folder_id: primaryFolderId(labels, folderIds),
       subject: latest.subject,
       snippet: latest.snippet,
       last_message_at: latest.received_at,
-      unread: latest.unread,
-      starred: latest.starred,
-      labels: latest.labels,
+      unread: messages.some((message) => message.unread),
+      starred: messages.some((message) => message.starred),
+      labels,
       updated_at: new Date().toISOString(),
     })
     .eq("id", input.threadId)
