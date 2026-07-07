@@ -382,7 +382,7 @@ type MailSendResponse = {
   error?: string;
 };
 
-type ComposeMode = "compose" | "reply" | "forward";
+type ComposeMode = "compose" | "reply" | "forward" | "draft";
 
 type ComposeState = {
   mode: ComposeMode;
@@ -393,6 +393,7 @@ type ComposeState = {
   subject: string;
   bodyText: string;
   replyToMessageId: string | null;
+  draftMessageId: string | null;
 };
 
 function primaryFolderIdForLabels(
@@ -488,6 +489,10 @@ function forwardedMessageBody(message: MailMessage): string {
     "",
     body,
   ].join("\n");
+}
+
+function isDraftMessage(message: MailMessage | null): boolean {
+  return Boolean(message?.labels.includes("DRAFT"));
 }
 
 function applyOptimisticMessageAction(
@@ -776,6 +781,7 @@ export default function MailClient({
         })
     : [];
   const selectedMessage = selectedMessages[selectedMessages.length - 1] ?? null;
+  const selectedIsDraft = isDraftMessage(selectedMessage);
 
   function openCompose(accountId = selectedAccount?.id ?? "") {
     if (!accountId) return;
@@ -789,6 +795,7 @@ export default function MailClient({
       subject: "",
       bodyText: "",
       replyToMessageId: null,
+      draftMessageId: null,
     });
   }
 
@@ -807,6 +814,7 @@ export default function MailClient({
       subject: replySubject(selectedMessage.subject),
       bodyText: quotedMessageBody(selectedMessage),
       replyToMessageId: selectedMessage.id,
+      draftMessageId: null,
     });
   }
 
@@ -822,6 +830,28 @@ export default function MailClient({
       subject: forwardSubject(selectedMessage.subject),
       bodyText: forwardedMessageBody(selectedMessage),
       replyToMessageId: null,
+      draftMessageId: null,
+    });
+  }
+
+  function openDraft() {
+    if (!selectedAccount || !selectedMessage || !isDraftMessage(selectedMessage)) {
+      return;
+    }
+    setShowCcBcc(
+      selectedMessage.ccRecipients.length > 0 ||
+        selectedMessage.bccRecipients.length > 0,
+    );
+    setCompose({
+      mode: "draft",
+      accountId: selectedAccount.id,
+      to: selectedMessage.toRecipients.map(recipientInput).join(", "),
+      cc: selectedMessage.ccRecipients.map(recipientInput).join(", "),
+      bcc: selectedMessage.bccRecipients.map(recipientInput).join(", "),
+      subject: selectedMessage.subject === "(no subject)" ? "" : selectedMessage.subject,
+      bodyText: selectedMessage.bodyText,
+      replyToMessageId: null,
+      draftMessageId: selectedMessage.id,
     });
   }
 
@@ -844,13 +874,14 @@ export default function MailClient({
           subject: compose.subject,
           bodyText: compose.bodyText,
           replyToMessageId: compose.replyToMessageId,
+          draftMessageId: compose.draftMessageId,
         }),
       });
       const data = (await res.json().catch(() => ({}))) as MailSendResponse;
       if (!res.ok) throw new Error(data.error || `Send failed (${res.status})`);
       if (data.workspace) setMailWorkspace(data.workspace);
       setSelectedAccountId(accountId);
-      if (mode === "compose" || mode === "forward") {
+      if (mode === "compose" || mode === "forward" || mode === "draft") {
         const sentFolder =
           data.workspace?.folders.find(
             (folder) =>
@@ -864,6 +895,59 @@ export default function MailClient({
       setUiNotice("Sent.");
     } catch (err) {
       setUiError(err instanceof Error ? err.message : "Send failed");
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  async function saveDraft() {
+    if (!compose) return;
+    const accountId = compose.accountId;
+    setPendingAction("save-draft");
+    setUiError(null);
+    setUiNotice(null);
+    try {
+      const res = await fetch("/api/mail/drafts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          accountId,
+          to: compose.to,
+          cc: compose.cc,
+          bcc: compose.bcc,
+          subject: compose.subject,
+          bodyText: compose.bodyText,
+          replyToMessageId: compose.replyToMessageId,
+          draftMessageId: compose.draftMessageId,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as MailSendResponse;
+      if (!res.ok) {
+        throw new Error(data.error || `Draft save failed (${res.status})`);
+      }
+      if (data.workspace) setMailWorkspace(data.workspace);
+      if (data.message) {
+        setCompose((current) =>
+          current
+            ? {
+                ...current,
+                mode: "draft",
+                draftMessageId: data.message?.id ?? current.draftMessageId,
+              }
+            : current,
+        );
+      }
+      setSelectedAccountId(accountId);
+      const draftFolder =
+        data.workspace?.folders.find(
+          (folder) =>
+            folder.accountId === accountId && folder.providerFolderId === "DRAFT",
+        ) ?? null;
+      if (draftFolder) setSelectedFolderId(draftFolder.id);
+      if (data.thread) setSelectedThreadId(data.thread.id);
+      setUiNotice("Draft saved.");
+    } catch (err) {
+      setUiError(err instanceof Error ? err.message : "Draft save failed");
     } finally {
       setPendingAction(null);
     }
@@ -1009,9 +1093,11 @@ export default function MailClient({
     setPendingAction(action);
     setUiError(null);
     setUiNotice(null);
-    setMailWorkspace((current) =>
-      applyOptimisticMessageAction(current, selectedMessage.id, action),
-    );
+    if (action !== "delete_draft") {
+      setMailWorkspace((current) =>
+        applyOptimisticMessageAction(current, selectedMessage.id, action),
+      );
+    }
     try {
       const res = await fetch(`/api/mail/messages/${selectedMessage.id}/action`, {
         method: "POST",
@@ -1051,12 +1137,16 @@ export default function MailClient({
       null
     : null;
   const sendingMail = pendingAction === "send-mail";
+  const savingDraft = pendingAction === "save-draft";
+  const composingBusy = sendingMail || savingDraft;
   const composeTitle =
     compose?.mode === "reply"
       ? "Reply"
       : compose?.mode === "forward"
         ? "Forward"
-        : "New message";
+        : compose?.mode === "draft"
+          ? "Draft"
+          : "New message";
 
   function renderFolderButton(folder: MailFolder) {
     const selected = activeFolderId === folder.id;
@@ -1478,24 +1568,39 @@ export default function MailClient({
           </div>
           {selectedMessage && (
             <div className="flex shrink-0 items-center gap-1">
-              <button
-                type="button"
-                title="Reply"
-                disabled={!!pendingAction || !selectedMessage.fromEmail}
-                onClick={openReply}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
-              >
-                <Reply size={16} />
-              </button>
-              <button
-                type="button"
-                title="Forward"
-                disabled={!!pendingAction}
-                onClick={openForward}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
-              >
-                <Forward size={16} />
-              </button>
+              {selectedIsDraft ? (
+                <button
+                  type="button"
+                  title="Edit draft"
+                  disabled={!!pendingAction}
+                  onClick={openDraft}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[var(--fg)] hover:bg-[var(--card)] disabled:opacity-50"
+                >
+                  <PencilLine size={15} />
+                  Edit
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    title="Reply"
+                    disabled={!!pendingAction || !selectedMessage.fromEmail}
+                    onClick={openReply}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
+                  >
+                    <Reply size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    title="Forward"
+                    disabled={!!pendingAction}
+                    onClick={openForward}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
+                  >
+                    <Forward size={16} />
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 title={selectedMessage.starred ? "Unstar" : "Star"}
@@ -1538,9 +1643,13 @@ export default function MailClient({
               </button>
               <button
                 type="button"
-                title="Trash"
+                title={selectedIsDraft ? "Discard draft" : "Trash"}
                 disabled={!!pendingAction}
-                onClick={() => void runMessageAction("trash")}
+                onClick={() =>
+                  void runMessageAction(
+                    selectedIsDraft ? "delete_draft" : "trash",
+                  )
+                }
                 className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-red-500 disabled:opacity-50"
               >
                 {pendingAction ? (
@@ -1672,7 +1781,7 @@ export default function MailClient({
             <button
               type="button"
               title="Close"
-              disabled={sendingMail}
+              disabled={composingBusy}
               onClick={() => setCompose(null)}
               className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
             >
@@ -1686,7 +1795,7 @@ export default function MailClient({
                 <span className="w-12 shrink-0">From</span>
                 <select
                   value={compose.accountId}
-                  disabled={sendingMail || compose.mode === "reply"}
+                  disabled={composingBusy || compose.mode === "reply"}
                   onChange={(event) =>
                     setCompose((current) =>
                       current
@@ -1709,7 +1818,7 @@ export default function MailClient({
                 <span className="w-12 shrink-0">To</span>
                 <input
                   value={compose.to}
-                  disabled={sendingMail}
+                  disabled={composingBusy}
                   onChange={(event) =>
                     setCompose((current) =>
                       current ? { ...current, to: event.target.value } : current,
@@ -1720,7 +1829,7 @@ export default function MailClient({
                 />
                 <button
                   type="button"
-                  disabled={sendingMail}
+                  disabled={composingBusy}
                   onClick={() => setShowCcBcc((value) => !value)}
                   className="rounded-md px-2 py-1 text-xs text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
                 >
@@ -1735,7 +1844,7 @@ export default function MailClient({
                     <span className="w-12 shrink-0">Cc</span>
                     <input
                       value={compose.cc}
-                      disabled={sendingMail}
+                      disabled={composingBusy}
                       onChange={(event) =>
                         setCompose((current) =>
                           current
@@ -1753,7 +1862,7 @@ export default function MailClient({
                     <span className="w-12 shrink-0">Bcc</span>
                     <input
                       value={compose.bcc}
-                      disabled={sendingMail}
+                      disabled={composingBusy}
                       onChange={(event) =>
                         setCompose((current) =>
                           current
@@ -1771,7 +1880,7 @@ export default function MailClient({
             <div className="border-b border-[var(--border)] px-3 py-2">
               <input
                 value={compose.subject}
-                disabled={sendingMail}
+                disabled={composingBusy}
                 onChange={(event) =>
                   setCompose((current) =>
                     current
@@ -1785,7 +1894,7 @@ export default function MailClient({
             </div>
             <textarea
               value={compose.bodyText}
-              disabled={sendingMail}
+              disabled={composingBusy}
               onChange={(event) =>
                 setCompose((current) =>
                   current ? { ...current, bodyText: event.target.value } : current,
@@ -1800,19 +1909,30 @@ export default function MailClient({
             <div className="min-w-0 truncate text-xs text-[var(--muted)]">
               {composeAccount?.email ?? ""}
             </div>
-            <button
-              type="button"
-              disabled={sendingMail || !compose.to.trim() || !compose.accountId}
-              onClick={() => void sendCompose()}
-              className="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--fg)] px-3 text-sm font-medium text-[var(--bg)] hover:opacity-90 disabled:opacity-50"
-            >
-              {sendingMail ? (
-                <Loader2 size={15} className="animate-spin" />
-              ) : (
-                <Send size={15} />
-              )}
-              Send
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                disabled={composingBusy || !compose.accountId}
+                onClick={() => void saveDraft()}
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border)] px-3 text-sm font-medium text-[var(--fg)] hover:bg-[var(--card)] disabled:opacity-50"
+              >
+                {savingDraft && <Loader2 size={15} className="animate-spin" />}
+                Save draft
+              </button>
+              <button
+                type="button"
+                disabled={composingBusy || !compose.to.trim() || !compose.accountId}
+                onClick={() => void sendCompose()}
+                className="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--fg)] px-3 text-sm font-medium text-[var(--bg)] hover:opacity-90 disabled:opacity-50"
+              >
+                {sendingMail ? (
+                  <Loader2 size={15} className="animate-spin" />
+                ) : (
+                  <Send size={15} />
+                )}
+                Send
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -271,6 +271,27 @@ type GmailSendResponse = {
   labelIds?: string[];
 };
 
+type GmailDraftRef = {
+  id: string;
+  message?: {
+    id?: string;
+    threadId?: string;
+  };
+};
+
+type GmailDraftList = {
+  drafts?: GmailDraftRef[];
+  nextPageToken?: string;
+};
+
+type GmailDraftResponse = {
+  id: string;
+  message?: {
+    id?: string;
+    threadId?: string;
+  };
+};
+
 type GmailAttachmentResponse = {
   data?: string;
   size?: number;
@@ -1573,6 +1594,34 @@ function replySubject(subject: string): string {
   return /^re:/i.test(clean) ? clean : `Re: ${clean}`;
 }
 
+async function listGmailDraftRefs(
+  accessToken: string,
+): Promise<GmailDraftRef[]> {
+  const drafts: GmailDraftRef[] = [];
+  let pageToken: string | undefined;
+  do {
+    const params = new URLSearchParams({ maxResults: "100" });
+    if (pageToken) params.set("pageToken", pageToken);
+    const page = await googleJson<GmailDraftList>(
+      accessToken,
+      `https://gmail.googleapis.com/gmail/v1/users/me/drafts?${params.toString()}`,
+    );
+    drafts.push(...(page.drafts ?? []));
+    pageToken = page.nextPageToken;
+  } while (pageToken);
+  return drafts;
+}
+
+async function findGmailDraftIdByMessageId(
+  accessToken: string,
+  providerMessageId: string,
+): Promise<string | null> {
+  const drafts = await listGmailDraftRefs(accessToken);
+  return (
+    drafts.find((draft) => draft.message?.id === providerMessageId)?.id ?? null
+  );
+}
+
 async function gmailSendRaw(input: {
   accessToken: string;
   raw: string;
@@ -1601,6 +1650,119 @@ async function gmailSendRaw(input: {
     );
   }
   return data;
+}
+
+async function gmailDraftCreate(input: {
+  accessToken: string;
+  raw: string;
+  threadId?: string | null;
+}): Promise<GmailDraftResponse> {
+  const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/drafts", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${input.accessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      message: {
+        raw: base64Url(input.raw),
+        ...(input.threadId ? { threadId: input.threadId } : {}),
+      },
+    }),
+  });
+  const data = (await res.json().catch(() => null)) as
+    | (GmailDraftResponse & { error?: { message?: string } })
+    | null;
+  if (!res.ok || !data?.id) {
+    throw new Error(
+      data?.error?.message || `Gmail draft create failed (${res.status})`,
+    );
+  }
+  return data;
+}
+
+async function gmailDraftUpdate(input: {
+  accessToken: string;
+  draftId: string;
+  raw: string;
+  threadId?: string | null;
+}): Promise<GmailDraftResponse> {
+  const res = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/drafts/${encodeURIComponent(
+      input.draftId,
+    )}`,
+    {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${input.accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        message: {
+          raw: base64Url(input.raw),
+          ...(input.threadId ? { threadId: input.threadId } : {}),
+        },
+      }),
+    },
+  );
+  const data = (await res.json().catch(() => null)) as
+    | (GmailDraftResponse & { error?: { message?: string } })
+    | null;
+  if (!res.ok || !data?.id) {
+    throw new Error(
+      data?.error?.message || `Gmail draft update failed (${res.status})`,
+    );
+  }
+  return data;
+}
+
+async function gmailDraftSend(input: {
+  accessToken: string;
+  draftId: string;
+}): Promise<GmailSendResponse> {
+  const res = await fetch(
+    "https://gmail.googleapis.com/gmail/v1/users/me/drafts/send",
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${input.accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ id: input.draftId }),
+    },
+  );
+  const data = (await res.json().catch(() => null)) as
+    | (GmailSendResponse & { error?: { message?: string } })
+    | null;
+  if (!res.ok || !data?.id) {
+    throw new Error(
+      data?.error?.message || `Gmail draft send failed (${res.status})`,
+    );
+  }
+  return data;
+}
+
+async function gmailDraftDelete(input: {
+  accessToken: string;
+  draftId: string;
+}): Promise<void> {
+  const res = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/drafts/${encodeURIComponent(
+      input.draftId,
+    )}`,
+    {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${input.accessToken}` },
+    },
+  );
+  if (!res.ok) {
+    const data = (await res.json().catch(() => null)) as
+      | { error?: { message?: string } }
+      | null;
+    throw new Error(
+      data?.error?.message || `Gmail draft delete failed (${res.status})`,
+    );
+  }
 }
 
 async function getLocalMailMessageResult(input: {
@@ -1643,29 +1805,20 @@ export type MailSendResult = {
   thread: MailThread | null;
 };
 
-export async function sendGmailMessage(input: {
+async function buildOutgoingGmailMessage(input: {
   ownerId: string;
-  accountId: string;
+  account: MailAccountRow;
+  accessToken: string;
   to: string;
   cc?: string | null;
   bcc?: string | null;
   subject: string;
   bodyText: string;
   replyToMessageId?: string | null;
-}): Promise<MailSendResult> {
+}): Promise<{ raw: string; threadProviderId: string | null }> {
   const to = normalizeRecipientInput(input.to);
   const cc = normalizeRecipientInput(input.cc ?? "");
   const bcc = normalizeRecipientInput(input.bcc ?? "");
-  if (to.length === 0) throw new Error("Add at least one recipient.");
-  if (input.bodyText.length > 200_000) {
-    throw new Error("Message body is too long.");
-  }
-
-  const account = await getPrivateAccount(input.ownerId, input.accountId);
-  if (!account || account.provider !== "gmail") {
-    throw new Error("Mail account not found");
-  }
-  const accessToken = await gmailAccessToken(account);
   let threadProviderId: string | null = null;
   let inReplyTo: string | null = null;
   let references: string | null = null;
@@ -1677,7 +1830,7 @@ export async function sendGmailMessage(input: {
       .from("mail_messages")
       .select("*")
       .eq("owner_id", input.ownerId)
-      .eq("account_id", account.id)
+      .eq("account_id", input.account.id)
       .eq("id", input.replyToMessageId)
       .maybeSingle();
     if (replyMessageError) throw replyMessageError;
@@ -1700,7 +1853,7 @@ export async function sendGmailMessage(input: {
     }
 
     const original = await fetchGmailMessageWithRetry(
-      accessToken,
+      input.accessToken,
       replyMessage.provider_message_id,
     );
     const originalMessageId = header(original.payload?.headers, "Message-ID");
@@ -1713,35 +1866,112 @@ export async function sendGmailMessage(input: {
     }
   }
 
+  return {
+    raw: buildRfc822Message({
+      from: {
+        email: input.account.email,
+        name: input.account.display_name,
+      },
+      to,
+      cc,
+      bcc,
+      subject: subject || "(no subject)",
+      bodyText: input.bodyText,
+      inReplyTo,
+      references,
+    }),
+    threadProviderId,
+  };
+}
+
+export async function sendGmailMessage(input: {
+  ownerId: string;
+  accountId: string;
+  to: string;
+  cc?: string | null;
+  bcc?: string | null;
+  subject: string;
+  bodyText: string;
+  replyToMessageId?: string | null;
+  draftMessageId?: string | null;
+}): Promise<MailSendResult> {
+  const to = normalizeRecipientInput(input.to);
+  if (to.length === 0) throw new Error("Add at least one recipient.");
+  if (input.bodyText.length > 200_000) {
+    throw new Error("Message body is too long.");
+  }
+
+  const account = await getPrivateAccount(input.ownerId, input.accountId);
+  if (!account || account.provider !== "gmail") {
+    throw new Error("Mail account not found");
+  }
+  const accessToken = await gmailAccessToken(account);
   const folderIdByProviderId = await syncGmailFolders({
     ownerId: input.ownerId,
     accountId: account.id,
     accessToken,
   });
-  const raw = buildRfc822Message({
-    from: {
-      email: account.email,
-      name: account.display_name,
-    },
-    to,
-    cc,
-    bcc,
-    subject: subject || "(no subject)",
-    bodyText: input.bodyText,
-    inReplyTo,
-    references,
-  });
-  const sent = await gmailSendRaw({
+  const outgoing = await buildOutgoingGmailMessage({
+    ownerId: input.ownerId,
+    account,
     accessToken,
-    raw,
-    threadId: threadProviderId,
+    to: input.to,
+    cc: input.cc,
+    bcc: input.bcc,
+    subject: input.subject,
+    bodyText: input.bodyText,
+    replyToMessageId: input.replyToMessageId,
   });
+  let oldDraftProviderMessageId: string | null = null;
+  let sent: GmailSendResponse;
+  if (input.draftMessageId) {
+    const db = createAdminClient();
+    const { data: draftMessageData, error: draftMessageError } = await db
+      .from("mail_messages")
+      .select("*")
+      .eq("owner_id", input.ownerId)
+      .eq("account_id", account.id)
+      .eq("id", input.draftMessageId)
+      .maybeSingle();
+    if (draftMessageError) throw draftMessageError;
+    if (!draftMessageData) throw new Error("Draft message not found");
+    const draftMessage = draftMessageData as MailMessageRow;
+    oldDraftProviderMessageId = draftMessage.provider_message_id;
+    const draftId = await findGmailDraftIdByMessageId(
+      accessToken,
+      draftMessage.provider_message_id,
+    );
+    if (!draftId) throw new Error("Gmail draft not found");
+    const updatedDraft = await gmailDraftUpdate({
+      accessToken,
+      draftId,
+      raw: outgoing.raw,
+      threadId: outgoing.threadProviderId,
+    });
+    sent = await gmailDraftSend({
+      accessToken,
+      draftId: updatedDraft.id,
+    });
+  } else {
+    sent = await gmailSendRaw({
+      accessToken,
+      raw: outgoing.raw,
+      threadId: outgoing.threadProviderId,
+    });
+  }
   const detailed = await fetchGmailMessageWithRetry(accessToken, sent.id);
   await upsertParsedGmailMessages({
     ownerId: input.ownerId,
     accountId: account.id,
     messages: [parseGmailMessage(detailed, folderIdByProviderId)],
   });
+  if (oldDraftProviderMessageId && oldDraftProviderMessageId !== sent.id) {
+    await removeLocalDeletedMessages({
+      ownerId: input.ownerId,
+      accountId: account.id,
+      providerMessageIds: [oldDraftProviderMessageId],
+    });
+  }
   await syncGmailFolders({
     ownerId: input.ownerId,
     accountId: account.id,
@@ -1768,6 +1998,124 @@ export async function sendGmailMessage(input: {
     workspace: await listMailWorkspace(input.ownerId),
     message: sentLocal.message,
     thread: sentLocal.thread,
+  };
+}
+
+export async function saveGmailDraft(input: {
+  ownerId: string;
+  accountId: string;
+  to: string;
+  cc?: string | null;
+  bcc?: string | null;
+  subject: string;
+  bodyText: string;
+  replyToMessageId?: string | null;
+  draftMessageId?: string | null;
+}): Promise<MailSendResult> {
+  if (input.bodyText.length > 200_000) {
+    throw new Error("Message body is too long.");
+  }
+
+  const account = await getPrivateAccount(input.ownerId, input.accountId);
+  if (!account || account.provider !== "gmail") {
+    throw new Error("Mail account not found");
+  }
+  const accessToken = await gmailAccessToken(account);
+  const folderIdByProviderId = await syncGmailFolders({
+    ownerId: input.ownerId,
+    accountId: account.id,
+    accessToken,
+  });
+  const outgoing = await buildOutgoingGmailMessage({
+    ownerId: input.ownerId,
+    account,
+    accessToken,
+    to: input.to,
+    cc: input.cc,
+    bcc: input.bcc,
+    subject: input.subject,
+    bodyText: input.bodyText,
+    replyToMessageId: input.replyToMessageId,
+  });
+
+  let oldDraftProviderMessageId: string | null = null;
+  let draft: GmailDraftResponse;
+  if (input.draftMessageId) {
+    const db = createAdminClient();
+    const { data: draftMessageData, error: draftMessageError } = await db
+      .from("mail_messages")
+      .select("*")
+      .eq("owner_id", input.ownerId)
+      .eq("account_id", account.id)
+      .eq("id", input.draftMessageId)
+      .maybeSingle();
+    if (draftMessageError) throw draftMessageError;
+    if (!draftMessageData) throw new Error("Draft message not found");
+    const draftMessage = draftMessageData as MailMessageRow;
+    oldDraftProviderMessageId = draftMessage.provider_message_id;
+    const draftId = await findGmailDraftIdByMessageId(
+      accessToken,
+      draftMessage.provider_message_id,
+    );
+    if (!draftId) throw new Error("Gmail draft not found");
+    draft = await gmailDraftUpdate({
+      accessToken,
+      draftId,
+      raw: outgoing.raw,
+      threadId: outgoing.threadProviderId,
+    });
+  } else {
+    draft = await gmailDraftCreate({
+      accessToken,
+      raw: outgoing.raw,
+      threadId: outgoing.threadProviderId,
+    });
+  }
+
+  const providerMessageId = draft.message?.id;
+  if (!providerMessageId) throw new Error("Gmail draft did not return a message");
+  const detailed = await fetchGmailMessageWithRetry(accessToken, providerMessageId);
+  await upsertParsedGmailMessages({
+    ownerId: input.ownerId,
+    accountId: account.id,
+    messages: [parseGmailMessage(detailed, folderIdByProviderId)],
+  });
+  if (
+    oldDraftProviderMessageId &&
+    oldDraftProviderMessageId !== providerMessageId
+  ) {
+    await removeLocalDeletedMessages({
+      ownerId: input.ownerId,
+      accountId: account.id,
+      providerMessageIds: [oldDraftProviderMessageId],
+    });
+  }
+  await syncGmailFolders({
+    ownerId: input.ownerId,
+    accountId: account.id,
+    accessToken,
+  });
+  const profile = await fetchGmailProfile(accessToken);
+  const syncState = jsonObject(account.sync_state);
+  await updateAccountStatus(account.id, input.ownerId, {
+    status: "connected",
+    error: null,
+    last_synced_at: new Date().toISOString(),
+    sync_state: {
+      ...syncState,
+      ...(profile.historyId ? { historyId: profile.historyId } : {}),
+    },
+  });
+
+  const draftLocal = await getLocalMailMessageResult({
+    ownerId: input.ownerId,
+    accountId: account.id,
+    providerMessageId,
+  });
+  return {
+    workspace: await listMailWorkspace(input.ownerId),
+    message: draftLocal.message,
+    thread: draftLocal.thread,
   };
 }
 
@@ -2031,8 +2379,9 @@ async function removeLocalDeletedMessages(input: {
 }
 
 export type MailMessageActionResult = {
-  message: MailMessage;
-  thread: MailThread | null;
+  message?: MailMessage;
+  thread?: MailThread | null;
+  workspace?: MailWorkspace;
 };
 
 async function updateLocalMessageAfterAction(input: {
@@ -2125,6 +2474,24 @@ export async function applyMailMessageAction(input: {
     });
   } else if (input.action === "trash") {
     await gmailTrash(accessToken, message.provider_message_id);
+  } else if (input.action === "delete_draft") {
+    const draftId = await findGmailDraftIdByMessageId(
+      accessToken,
+      message.provider_message_id,
+    );
+    if (!draftId) throw new Error("Gmail draft not found");
+    await gmailDraftDelete({ accessToken, draftId });
+    await removeLocalDeletedMessages({
+      ownerId: input.ownerId,
+      accountId: account.id,
+      providerMessageIds: [message.provider_message_id],
+    });
+    await syncGmailFolders({
+      ownerId: input.ownerId,
+      accountId: account.id,
+      accessToken,
+    });
+    return { workspace: await listMailWorkspace(input.ownerId) };
   } else if (input.action === "star") {
     await gmailModify(accessToken, message.provider_message_id, {
       addLabelIds: ["STARRED"],

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDriveUserFromRequest } from "@/lib/drive-auth-server";
-import { sendGmailMessage } from "@/lib/mail-server";
+import { saveGmailDraft } from "@/lib/mail-server";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,7 @@ function notFound() {
   });
 }
 
-type SendBody = {
+type DraftBody = {
   accountId?: unknown;
   to?: unknown;
   cc?: unknown;
@@ -30,9 +30,9 @@ export async function POST(req: Request) {
   const user = await getDriveUserFromRequest(req);
   if (!user) return notFound();
 
-  let body: SendBody;
+  let body: DraftBody;
   try {
-    body = (await req.json()) as SendBody;
+    body = (await req.json()) as DraftBody;
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
@@ -42,7 +42,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const result = await sendGmailMessage({
+    const result = await saveGmailDraft({
       ownerId: user.id,
       accountId: body.accountId,
       to: stringField(body.to),
@@ -62,7 +62,7 @@ export async function POST(req: Request) {
     return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Send failed" },
+      { error: err instanceof Error ? err.message : "Draft save failed" },
       { status: 400 },
     );
   }
