@@ -211,6 +211,12 @@ export default function MailClient({
     return workspace.threads.filter((thread) => {
       if (thread.accountId !== selectedAccount.id) return false;
       if (
+        activeFolder?.providerFolderId !== "TRASH" &&
+        thread.labels.includes("TRASH")
+      ) {
+        return false;
+      }
+      if (
         activeFolder &&
         !thread.labels.includes(activeFolder.providerFolderId)
       ) {

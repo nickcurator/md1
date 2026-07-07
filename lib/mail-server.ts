@@ -748,6 +748,25 @@ async function syncGmailFolders(input: {
   return folderIdByProviderId;
 }
 
+async function listMailFolderIds(input: {
+  ownerId: string;
+  accountId: string;
+}): Promise<Map<string, string>> {
+  const db = createAdminClient();
+  const { data, error } = await db
+    .from("mail_folders")
+    .select("id, provider_folder_id")
+    .eq("owner_id", input.ownerId)
+    .eq("account_id", input.accountId);
+  if (error) throw error;
+  return new Map(
+    (data as { id: string; provider_folder_id: string }[]).map((row) => [
+      row.provider_folder_id,
+      row.id,
+    ]),
+  );
+}
+
 function decodeGmailData(data: string | undefined): string {
   if (!data) return "";
   return Buffer.from(data, "base64url").toString("utf8");
@@ -1095,6 +1114,65 @@ async function gmailTrash(accessToken: string, providerMessageId: string) {
   }
 }
 
+async function updateLocalMessageFromGmail(input: {
+  ownerId: string;
+  accountId: string;
+  threadId: string | null;
+  messageId: string;
+  accessToken: string;
+  providerMessageId: string;
+}): Promise<void> {
+  const db = createAdminClient();
+  const folderIds = await listMailFolderIds({
+    ownerId: input.ownerId,
+    accountId: input.accountId,
+  });
+  const gmailMessage = await fetchGmailMessageWithRetry(
+    input.accessToken,
+    input.providerMessageId,
+  );
+  const parsed = parseGmailMessage(gmailMessage, folderIds);
+  const now = new Date().toISOString();
+
+  const { error: updateMessageError } = await db
+    .from("mail_messages")
+    .update({
+      folder_id: parsed.folderId,
+      subject: parsed.subject,
+      snippet: parsed.snippet,
+      body_text: parsed.bodyText,
+      body_html: parsed.bodyHtml,
+      sent_at: parsed.sentAt,
+      received_at: parsed.receivedAt,
+      unread: parsed.unread,
+      starred: parsed.starred,
+      has_attachments: parsed.hasAttachments,
+      labels: parsed.labels,
+      updated_at: now,
+    })
+    .eq("id", input.messageId)
+    .eq("owner_id", input.ownerId);
+  if (updateMessageError) throw updateMessageError;
+
+  if (input.threadId) {
+    const { error: updateThreadError } = await db
+      .from("mail_threads")
+      .update({
+        folder_id: parsed.folderId,
+        subject: parsed.subject,
+        snippet: parsed.snippet,
+        last_message_at: parsed.receivedAt,
+        unread: parsed.unread,
+        starred: parsed.starred,
+        labels: parsed.labels,
+        updated_at: now,
+      })
+      .eq("id", input.threadId)
+      .eq("owner_id", input.ownerId);
+    if (updateThreadError) throw updateThreadError;
+  }
+}
+
 export type MailMessageAction =
   | "mark_read"
   | "mark_unread"
@@ -1124,78 +1202,39 @@ export async function applyMailMessageAction(input: {
     throw new Error("Mail account not found");
   }
   const accessToken = await gmailAccessToken(account);
-  const labels = new Set(message.labels ?? []);
-  const patch: Partial<MailMessageRow> = {
-    updated_at: new Date().toISOString(),
-  };
 
   if (input.action === "mark_read") {
     await gmailModify(accessToken, message.provider_message_id, {
       removeLabelIds: ["UNREAD"],
     });
-    labels.delete("UNREAD");
-    patch.unread = false;
   } else if (input.action === "mark_unread") {
     await gmailModify(accessToken, message.provider_message_id, {
       addLabelIds: ["UNREAD"],
     });
-    labels.add("UNREAD");
-    patch.unread = true;
   } else if (input.action === "archive") {
     await gmailModify(accessToken, message.provider_message_id, {
       removeLabelIds: ["INBOX"],
     });
-    labels.delete("INBOX");
-    patch.folder_id = null;
   } else if (input.action === "trash") {
     await gmailTrash(accessToken, message.provider_message_id);
-    labels.add("TRASH");
-    labels.delete("INBOX");
-    const trash = await db
-      .from("mail_folders")
-      .select("id")
-      .eq("account_id", account.id)
-      .eq("provider_folder_id", "TRASH")
-      .maybeSingle();
-    if (trash.error) throw trash.error;
-    patch.folder_id = trash.data ? (trash.data as { id: string }).id : null;
   } else if (input.action === "star") {
     await gmailModify(accessToken, message.provider_message_id, {
       addLabelIds: ["STARRED"],
     });
-    labels.add("STARRED");
-    patch.starred = true;
   } else if (input.action === "unstar") {
     await gmailModify(accessToken, message.provider_message_id, {
       removeLabelIds: ["STARRED"],
     });
-    labels.delete("STARRED");
-    patch.starred = false;
   }
 
-  patch.labels = Array.from(labels);
-  const { error: updateMessageError } = await db
-    .from("mail_messages")
-    .update(patch)
-    .eq("id", message.id)
-    .eq("owner_id", input.ownerId);
-  if (updateMessageError) throw updateMessageError;
-
-  if (message.thread_id) {
-    const threadPatch: Partial<MailThreadRow> = {
-      updated_at: new Date().toISOString(),
-    };
-    if (patch.unread !== undefined) threadPatch.unread = patch.unread;
-    if (patch.starred !== undefined) threadPatch.starred = patch.starred;
-    if (patch.folder_id !== undefined) threadPatch.folder_id = patch.folder_id;
-    threadPatch.labels = Array.from(labels);
-    const { error: updateThreadError } = await db
-      .from("mail_threads")
-      .update(threadPatch)
-      .eq("id", message.thread_id)
-      .eq("owner_id", input.ownerId);
-    if (updateThreadError) throw updateThreadError;
-  }
+  await updateLocalMessageFromGmail({
+    ownerId: input.ownerId,
+    accountId: account.id,
+    threadId: message.thread_id,
+    messageId: message.id,
+    accessToken,
+    providerMessageId: message.provider_message_id,
+  });
 }
 
 export async function deleteMailAccount(input: {
