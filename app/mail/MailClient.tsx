@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   Archive,
@@ -67,6 +67,8 @@ function folderIcon(kind: MailFolderKind, size = 16) {
 
 const ESSENTIAL_LABELS = new Set(["INBOX", "SENT"]);
 const MAILBOX_ORDER = ["INBOX", "STARRED", "SENT", "DRAFT", "SPAM", "TRASH"];
+const MAX_COMPOSE_ATTACHMENTS = 8;
+const MAX_COMPOSE_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 const HIDDEN_SYSTEM_LABELS = new Set([
   "CHAT",
   "IMPORTANT",
@@ -120,16 +122,20 @@ function messageRecipients(recipients: MailMessage["toRecipients"]): string {
   return recipients.map(formatRecipient).join(", ");
 }
 
+function formatFileSize(size: number): string {
+  if (size < 1024) return `${size} B`;
+  const kb = size / 1024;
+  if (kb < 1024) return `${kb.toFixed(kb >= 100 ? 0 : 1)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(mb >= 100 ? 0 : 1)} MB`;
+}
+
 function attachmentLabel(attachment: MailAttachment): string {
   const size = attachment.size;
   if (typeof size !== "number" || !Number.isFinite(size) || size <= 0) {
     return attachment.mimeType;
   }
-  if (size < 1024) return `${attachment.mimeType} · ${size} B`;
-  const kb = size / 1024;
-  if (kb < 1024) return `${attachment.mimeType} · ${kb.toFixed(kb >= 100 ? 0 : 1)} KB`;
-  const mb = kb / 1024;
-  return `${attachment.mimeType} · ${mb.toFixed(mb >= 100 ? 0 : 1)} MB`;
+  return `${attachment.mimeType} · ${formatFileSize(size)}`;
 }
 
 function attachmentDownloadHref(
@@ -415,6 +421,14 @@ type MailMessageDetailResponse = {
 
 type ComposeMode = "compose" | "reply" | "forward" | "draft";
 
+type ComposeAttachment = {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  dataBase64: string;
+};
+
 type ComposeState = {
   mode: ComposeMode;
   accountId: string;
@@ -425,7 +439,59 @@ type ComposeState = {
   bodyText: string;
   replyToMessageId: string | null;
   draftMessageId: string | null;
+  attachments: ComposeAttachment[];
 };
+
+function composeAttachmentSize(attachments: ComposeAttachment[]): number {
+  return attachments.reduce((total, attachment) => total + attachment.size, 0);
+}
+
+function composeAttachmentLabel(attachment: ComposeAttachment): string {
+  return `${attachment.mimeType || "application/octet-stream"} · ${formatFileSize(
+    attachment.size,
+  )}`;
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function fileToComposeAttachment(file: File): Promise<ComposeAttachment> {
+  const buffer = await file.arrayBuffer();
+  return {
+    id: `${file.name}-${file.size}-${file.lastModified}-${
+      globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)
+    }`,
+    filename: file.name || "attachment",
+    mimeType: file.type || "application/octet-stream",
+    size: buffer.byteLength,
+    dataBase64: arrayBufferToBase64(buffer),
+  };
+}
+
+async function mailAttachmentToComposeAttachment(
+  message: MailMessage,
+  attachment: MailAttachment,
+): Promise<ComposeAttachment> {
+  const href = attachmentDownloadHref(message, attachment);
+  if (!href) throw new Error(`Cannot load ${attachment.filename}`);
+  const res = await fetch(href);
+  if (!res.ok) throw new Error(`Cannot load ${attachment.filename}`);
+  const buffer = await res.arrayBuffer();
+  return {
+    id: `${attachment.id}-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`,
+    filename: attachment.filename || "attachment",
+    mimeType: attachment.mimeType || "application/octet-stream",
+    size: buffer.byteLength,
+    dataBase64: arrayBufferToBase64(buffer),
+  };
+}
 
 function primaryFolderIdForLabels(
   workspace: MailWorkspace,
@@ -656,6 +722,7 @@ export default function MailClient({
   );
   const [compose, setCompose] = useState<ComposeState | null>(null);
   const [showCcBcc, setShowCcBcc] = useState(false);
+  const composeFileInputRef = useRef<HTMLInputElement | null>(null);
   const [messageDetailLoadingId, setMessageDetailLoadingId] = useState<
     string | null
   >(null);
@@ -1004,6 +1071,7 @@ export default function MailClient({
       bodyText: "",
       replyToMessageId: null,
       draftMessageId: null,
+      attachments: [],
     });
   }
 
@@ -1023,6 +1091,7 @@ export default function MailClient({
       bodyText: quotedMessageBody(selectedMessage),
       replyToMessageId: selectedMessage.id,
       draftMessageId: null,
+      attachments: [],
     });
   }
 
@@ -1039,11 +1108,40 @@ export default function MailClient({
       bodyText: forwardedMessageBody(selectedMessage),
       replyToMessageId: null,
       draftMessageId: null,
+      attachments: [],
     });
   }
 
-  function openDraft() {
+  async function openDraft() {
     if (!selectedAccount || !selectedMessage || !isDraftMessage(selectedMessage)) {
+      return;
+    }
+    setPendingAction("open-draft");
+    setUiError(null);
+    setUiNotice(null);
+    let attachments: ComposeAttachment[] = [];
+    try {
+      if (selectedMessage.attachments.length > MAX_COMPOSE_ATTACHMENTS) {
+        throw new Error(`Draft has more than ${MAX_COMPOSE_ATTACHMENTS} attachments.`);
+      }
+      const expectedSize = selectedMessage.attachments.reduce(
+        (total, attachment) => total + (attachment.size ?? 0),
+        0,
+      );
+      if (expectedSize > MAX_COMPOSE_ATTACHMENT_BYTES) {
+        throw new Error("Draft attachments are over the 4 MB compose limit.");
+      }
+      attachments = await Promise.all(
+        selectedMessage.attachments.map((attachment) =>
+          mailAttachmentToComposeAttachment(selectedMessage, attachment),
+        ),
+      );
+      if (composeAttachmentSize(attachments) > MAX_COMPOSE_ATTACHMENT_BYTES) {
+        throw new Error("Draft attachments are over the 4 MB compose limit.");
+      }
+    } catch (err) {
+      setUiError(err instanceof Error ? err.message : "Draft attachments failed to load");
+      setPendingAction(null);
       return;
     }
     setShowCcBcc(
@@ -1060,7 +1158,48 @@ export default function MailClient({
       bodyText: selectedMessage.bodyText,
       replyToMessageId: null,
       draftMessageId: selectedMessage.id,
+      attachments,
     });
+    setPendingAction(null);
+  }
+
+  async function addComposeFiles(files: FileList | null) {
+    if (!compose || !files?.length) return;
+    setUiError(null);
+    setUiNotice(null);
+    const incoming = Array.from(files);
+    if (compose.attachments.length + incoming.length > MAX_COMPOSE_ATTACHMENTS) {
+      setUiError(`Attach up to ${MAX_COMPOSE_ATTACHMENTS} files.`);
+      return;
+    }
+    const totalSize =
+      composeAttachmentSize(compose.attachments) +
+      incoming.reduce((total, file) => total + file.size, 0);
+    if (totalSize > MAX_COMPOSE_ATTACHMENT_BYTES) {
+      setUiError("Attachments can be up to 4 MB total.");
+      return;
+    }
+    try {
+      const attachments = await Promise.all(incoming.map(fileToComposeAttachment));
+      setCompose((current) =>
+        current
+          ? { ...current, attachments: [...current.attachments, ...attachments] }
+          : current,
+      );
+    } catch (err) {
+      setUiError(err instanceof Error ? err.message : "Attachment failed to load");
+    }
+  }
+
+  function removeComposeAttachment(id: string) {
+    setCompose((current) =>
+      current
+        ? {
+            ...current,
+            attachments: current.attachments.filter((attachment) => attachment.id !== id),
+          }
+        : current,
+    );
   }
 
   async function sendCompose() {
@@ -1081,6 +1220,11 @@ export default function MailClient({
           bcc: compose.bcc,
           subject: compose.subject,
           bodyText: compose.bodyText,
+          attachments: compose.attachments.map((attachment) => ({
+            filename: attachment.filename,
+            mimeType: attachment.mimeType,
+            dataBase64: attachment.dataBase64,
+          })),
           replyToMessageId: compose.replyToMessageId,
           draftMessageId: compose.draftMessageId,
         }),
@@ -1129,6 +1273,11 @@ export default function MailClient({
           bcc: compose.bcc,
           subject: compose.subject,
           bodyText: compose.bodyText,
+          attachments: compose.attachments.map((attachment) => ({
+            filename: attachment.filename,
+            mimeType: attachment.mimeType,
+            dataBase64: attachment.dataBase64,
+          })),
           replyToMessageId: compose.replyToMessageId,
           draftMessageId: compose.draftMessageId,
         }),
@@ -2017,7 +2166,7 @@ export default function MailClient({
                   type="button"
                   title="Edit draft"
                   disabled={!!pendingAction || messageBodyLoading}
-                  onClick={openDraft}
+                  onClick={() => void openDraft()}
                   className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[var(--fg)] hover:bg-[var(--card)] disabled:opacity-50"
                 >
                   <PencilLine size={15} />
@@ -2381,11 +2530,65 @@ export default function MailClient({
               className="min-h-[280px] w-full resize-none bg-transparent px-3 py-3 text-sm leading-6 text-[var(--fg)] outline-none placeholder:text-[var(--muted)] disabled:opacity-70"
               placeholder=""
             />
+            {compose.attachments.length > 0 && (
+              <div className="space-y-2 border-t border-[var(--border)] px-3 py-3">
+                {compose.attachments.map((attachment) => (
+                  <div
+                    key={attachment.id}
+                    className="flex min-w-0 items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-2"
+                  >
+                    <Paperclip size={15} className="shrink-0 text-[var(--muted)]" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm">
+                        {attachment.filename}
+                      </span>
+                      <span className="block truncate text-xs text-[var(--muted)]">
+                        {composeAttachmentLabel(attachment)}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      title="Remove attachment"
+                      disabled={composingBusy}
+                      onClick={() => removeComposeAttachment(attachment.id)}
+                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--bg)] hover:text-red-500 disabled:opacity-50"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--border)] px-3 py-2">
-            <div className="min-w-0 truncate text-xs text-[var(--muted)]">
-              {composeAccount?.email ?? ""}
+            <div className="flex min-w-0 items-center gap-2">
+              <input
+                ref={composeFileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  void addComposeFiles(event.currentTarget.files);
+                  event.currentTarget.value = "";
+                }}
+              />
+              <button
+                type="button"
+                title="Attach files"
+                disabled={composingBusy}
+                onClick={() => composeFileInputRef.current?.click()}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
+              >
+                <Paperclip size={16} />
+              </button>
+              <span className="min-w-0 truncate text-xs text-[var(--muted)]">
+                {compose.attachments.length > 0
+                  ? `${compose.attachments.length} file${
+                      compose.attachments.length === 1 ? "" : "s"
+                    } · ${formatFileSize(composeAttachmentSize(compose.attachments))}`
+                  : (composeAccount?.email ?? "")}
+              </span>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <button

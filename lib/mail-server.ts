@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabaseAdmin";
 import sanitizeHtml from "sanitize-html";
 import {
@@ -35,6 +36,8 @@ const GMAIL_SEARCH_PAGE_SIZE = 50;
 const MAIL_WORKSPACE_THREAD_LIMIT = 500;
 const MAIL_WORKSPACE_MESSAGE_LIMIT = 2000;
 const DEFAULT_GMAIL_CURSOR_KEY = "ALL";
+const MAX_OUTGOING_ATTACHMENTS = 8;
+const MAX_OUTGOING_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 const SAFE_MAIL_STYLE_VALUE =
   /^(?!.*(?:url|expression|javascript|vbscript|data:|@import))[-#%.,:/()"'\w\s]+$/i;
 const MAIL_HTML_SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
@@ -459,6 +462,13 @@ type GmailDraftResponse = {
     id?: string;
     threadId?: string;
   };
+};
+
+type NormalizedOutgoingAttachment = {
+  filename: string;
+  mimeType: string;
+  dataBase64: string;
+  size: number;
 };
 
 type GmailAttachmentResponse = {
@@ -1175,6 +1185,86 @@ function normalizeBodyText(value: string): string {
   return value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n/g, "\r\n");
 }
 
+function sanitizeAttachmentFilename(value: string): string {
+  return (
+    sanitizeHeaderValue(value)
+      .replace(/[\/\\]/g, "_")
+      .trim()
+      .slice(0, 180) || "attachment"
+  );
+}
+
+function normalizeOutgoingMimeType(value: unknown): string {
+  if (typeof value !== "string") return "application/octet-stream";
+  const clean = value.trim().toLowerCase();
+  return /^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/.test(clean)
+    ? clean
+    : "application/octet-stream";
+}
+
+function normalizeOutgoingAttachmentBase64(value: unknown): Buffer {
+  if (typeof value !== "string") {
+    throw new Error("Attachment data is missing.");
+  }
+  const withoutDataUrl = value.includes(",") ? value.split(",").pop() ?? "" : value;
+  const clean = withoutDataUrl.replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
+  if (clean.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(clean)) {
+    throw new Error("Attachment data is invalid.");
+  }
+  const buffer = Buffer.from(clean, "base64");
+  const normalizedInput = clean.replace(/=+$/g, "");
+  const normalizedOutput = buffer.toString("base64").replace(/=+$/g, "");
+  if (normalizedInput !== normalizedOutput) {
+    throw new Error("Attachment data is invalid.");
+  }
+  return buffer;
+}
+
+function normalizeOutgoingAttachments(
+  raw: unknown,
+): NormalizedOutgoingAttachment[] {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) throw new Error("Attachments must be an array.");
+  if (raw.length > MAX_OUTGOING_ATTACHMENTS) {
+    throw new Error(`Attach up to ${MAX_OUTGOING_ATTACHMENTS} files.`);
+  }
+
+  let totalBytes = 0;
+  return raw.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error("Attachment is invalid.");
+    }
+    const record = item as Record<string, unknown>;
+    const filename =
+      typeof record.filename === "string"
+        ? sanitizeAttachmentFilename(record.filename)
+        : "attachment";
+    const buffer = normalizeOutgoingAttachmentBase64(record.dataBase64);
+    totalBytes += buffer.length;
+    if (totalBytes > MAX_OUTGOING_ATTACHMENT_BYTES) {
+      throw new Error("Attachments can be up to 4 MB total.");
+    }
+    return {
+      filename,
+      mimeType: normalizeOutgoingMimeType(record.mimeType),
+      dataBase64: buffer.toString("base64"),
+      size: buffer.length,
+    };
+  });
+}
+
+function wrapBase64(value: string): string {
+  return value.match(/.{1,76}/g)?.join("\r\n") ?? "";
+}
+
+function mimeFilenameParams(filename: string): string {
+  const fallback = filename
+    .replace(/[^\x20-\x7E]/g, "_")
+    .replace(/["\\]/g, "_")
+    .trim() || "attachment";
+  return `filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
 function base64Url(value: string): string {
   return Buffer.from(value, "utf8")
     .toString("base64")
@@ -1192,8 +1282,10 @@ function buildRfc822Message(input: {
   bodyText: string;
   inReplyTo?: string | null;
   references?: string | null;
+  attachments?: NormalizedOutgoingAttachment[];
 }): string {
-  const headers = [
+  const attachments = input.attachments ?? [];
+  const baseHeaders = [
     `From: ${formatOutgoingAddress(input.from)}`,
     `To: ${input.to.map(formatOutgoingAddress).join(", ")}`,
     ...(input.cc.length > 0
@@ -1204,12 +1296,44 @@ function buildRfc822Message(input: {
       : []),
     `Subject: ${encodeHeaderValue(input.subject || "(no subject)")}`,
     "MIME-Version: 1.0",
-    'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: 8bit",
     ...(input.inReplyTo ? [`In-Reply-To: ${sanitizeHeaderValue(input.inReplyTo)}`] : []),
     ...(input.references ? [`References: ${sanitizeHeaderValue(input.references)}`] : []),
   ];
-  return `${headers.join("\r\n")}\r\n\r\n${normalizeBodyText(input.bodyText)}`;
+
+  if (attachments.length === 0) {
+    return `${[
+      ...baseHeaders,
+      'Content-Type: text/plain; charset="UTF-8"',
+      "Content-Transfer-Encoding: 8bit",
+    ].join("\r\n")}\r\n\r\n${normalizeBodyText(input.bodyText)}`;
+  }
+
+  const boundary = `md1_${randomUUID().replace(/-/g, "")}`;
+  const parts = [
+    `--${boundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    normalizeBodyText(input.bodyText),
+    ...attachments.flatMap((attachment) => {
+      const filenameParams = mimeFilenameParams(attachment.filename);
+      return [
+        `--${boundary}`,
+        `Content-Type: ${attachment.mimeType}`,
+        `Content-Disposition: attachment; ${filenameParams}`,
+        "Content-Transfer-Encoding: base64",
+        "",
+        wrapBase64(attachment.dataBase64),
+      ];
+    }),
+    `--${boundary}--`,
+    "",
+  ];
+
+  return `${[
+    ...baseHeaders,
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+  ].join("\r\n")}\r\n\r\n${parts.join("\r\n")}`;
 }
 
 function primaryFolderId(
@@ -2019,6 +2143,7 @@ async function buildOutgoingGmailMessage(input: {
   bcc?: string | null;
   subject: string;
   bodyText: string;
+  attachments: NormalizedOutgoingAttachment[];
   replyToMessageId?: string | null;
 }): Promise<{ raw: string; threadProviderId: string | null }> {
   const to = normalizeRecipientInput(input.to);
@@ -2082,6 +2207,7 @@ async function buildOutgoingGmailMessage(input: {
       bcc,
       subject: subject || "(no subject)",
       bodyText: input.bodyText,
+      attachments: input.attachments,
       inReplyTo,
       references,
     }),
@@ -2097,6 +2223,7 @@ export async function sendGmailMessage(input: {
   bcc?: string | null;
   subject: string;
   bodyText: string;
+  attachments?: unknown;
   replyToMessageId?: string | null;
   draftMessageId?: string | null;
 }): Promise<MailSendResult> {
@@ -2105,6 +2232,7 @@ export async function sendGmailMessage(input: {
   if (input.bodyText.length > 200_000) {
     throw new Error("Message body is too long.");
   }
+  const attachments = normalizeOutgoingAttachments(input.attachments);
 
   const account = await getPrivateAccount(input.ownerId, input.accountId);
   if (!account || account.provider !== "gmail") {
@@ -2125,6 +2253,7 @@ export async function sendGmailMessage(input: {
     bcc: input.bcc,
     subject: input.subject,
     bodyText: input.bodyText,
+    attachments,
     replyToMessageId: input.replyToMessageId,
   });
   let oldDraftProviderMessageId: string | null = null;
@@ -2214,12 +2343,14 @@ export async function saveGmailDraft(input: {
   bcc?: string | null;
   subject: string;
   bodyText: string;
+  attachments?: unknown;
   replyToMessageId?: string | null;
   draftMessageId?: string | null;
 }): Promise<MailSendResult> {
   if (input.bodyText.length > 200_000) {
     throw new Error("Message body is too long.");
   }
+  const attachments = normalizeOutgoingAttachments(input.attachments);
 
   const account = await getPrivateAccount(input.ownerId, input.accountId);
   if (!account || account.provider !== "gmail") {
@@ -2240,6 +2371,7 @@ export async function saveGmailDraft(input: {
     bcc: input.bcc,
     subject: input.subject,
     bodyText: input.bodyText,
+    attachments,
     replyToMessageId: input.replyToMessageId,
   });
 

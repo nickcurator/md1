@@ -18,6 +18,7 @@ type SendBody = {
   bcc?: unknown;
   subject?: unknown;
   bodyText?: unknown;
+  attachments?: unknown;
   replyToMessageId?: unknown;
   draftMessageId?: unknown;
 };
@@ -50,6 +51,7 @@ export async function POST(req: Request) {
       bcc: stringField(body.bcc),
       subject: stringField(body.subject),
       bodyText: stringField(body.bodyText),
+      attachments: body.attachments,
       replyToMessageId:
         typeof body.replyToMessageId === "string" && body.replyToMessageId
           ? body.replyToMessageId
