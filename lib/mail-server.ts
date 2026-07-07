@@ -27,6 +27,7 @@ export const GMAIL_SCOPES = [
 
 const FULL_GMAIL_SCOPE = "https://mail.google.com/";
 const MAX_EMPTY_TRASH_MESSAGES = 500;
+const GMAIL_BATCH_DELETE_CHUNK_SIZE = 500;
 
 const MAIL_TABLE_SETUP_ERROR =
   "Mail database is not set up yet. Apply supabase/migrations/034_mail_client.sql.";
@@ -1117,17 +1118,20 @@ async function gmailTrash(accessToken: string, providerMessageId: string) {
   }
 }
 
-async function gmailPermanentDelete(
+async function gmailBatchDeleteMessages(
   accessToken: string,
-  providerMessageId: string,
+  providerMessageIds: string[],
 ) {
+  if (providerMessageIds.length === 0) return;
   const res = await fetch(
-    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(
-      providerMessageId,
-    )}`,
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages/batchDelete",
     {
-      method: "DELETE",
-      headers: { authorization: `Bearer ${accessToken}` },
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ ids: providerMessageIds }),
     },
   );
   if (!res.ok) {
@@ -1135,7 +1139,7 @@ async function gmailPermanentDelete(
       | { error?: { message?: string } }
       | null;
     throw new Error(
-      data?.error?.message || `Gmail delete failed (${res.status})`,
+      data?.error?.message || `Gmail batch delete failed (${res.status})`,
     );
   }
 }
@@ -1169,22 +1173,20 @@ async function listGmailTrashMessageIds(
   };
 }
 
-async function deleteGmailMessagesLimited(
+async function deleteGmailMessagesInBatches(
   accessToken: string,
   providerMessageIds: string[],
 ): Promise<void> {
-  let nextIndex = 0;
-  const workerCount = Math.min(3, providerMessageIds.length);
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (nextIndex < providerMessageIds.length) {
-        const index = nextIndex;
-        nextIndex += 1;
-        await gmailPermanentDelete(accessToken, providerMessageIds[index]);
-        await wait(120);
-      }
-    }),
-  );
+  for (
+    let index = 0;
+    index < providerMessageIds.length;
+    index += GMAIL_BATCH_DELETE_CHUNK_SIZE
+  ) {
+    await gmailBatchDeleteMessages(
+      accessToken,
+      providerMessageIds.slice(index, index + GMAIL_BATCH_DELETE_CHUNK_SIZE),
+    );
+  }
 }
 
 async function refreshOrRemoveThread(input: {
@@ -1394,7 +1396,7 @@ export async function emptyGmailTrash(input: {
 
   const accessToken = await gmailAccessToken(account);
   const trash = await listGmailTrashMessageIds(accessToken);
-  await deleteGmailMessagesLimited(accessToken, trash.ids);
+  await deleteGmailMessagesInBatches(accessToken, trash.ids);
   await removeLocalDeletedMessages({
     ownerId: input.ownerId,
     accountId: account.id,

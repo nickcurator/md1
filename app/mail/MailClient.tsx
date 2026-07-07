@@ -449,6 +449,10 @@ export default function MailClient({
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [uiError, setUiError] = useState<string | null>(oauthError);
+  const [uiNotice, setUiNotice] = useState<string | null>(null);
+  const [trashDialogAccountId, setTrashDialogAccountId] = useState<string | null>(
+    null,
+  );
 
   const selectedAccount =
     mailWorkspace.accounts.find((account) => account.id === selectedAccountId) ??
@@ -605,6 +609,7 @@ export default function MailClient({
   async function syncAccount(accountId: string) {
     setSyncingAccountId(accountId);
     setUiError(null);
+    setUiNotice(null);
     try {
       const res = await fetch("/api/mail/sync", {
         method: "POST",
@@ -628,6 +633,7 @@ export default function MailClient({
     if (!window.confirm("Remove this mail account from md1?")) return;
     setPendingAction(`remove:${accountId}`);
     setUiError(null);
+    setUiNotice(null);
     try {
       const res = await fetch(`/api/mail/accounts/${accountId}`, {
         method: "DELETE",
@@ -649,12 +655,10 @@ export default function MailClient({
   }
 
   async function emptyTrash(accountId: string) {
-    const ok = window.confirm(
-      "Delete every message in Trash forever? This cannot be undone.",
-    );
-    if (!ok) return;
+    setTrashDialogAccountId(null);
     setPendingAction("empty-trash");
     setUiError(null);
+    setUiNotice(null);
     try {
       const res = await fetch(`/api/mail/accounts/${accountId}/empty-trash`, {
         method: "POST",
@@ -669,9 +673,11 @@ export default function MailClient({
         throw new Error(data.error || `Empty Trash failed (${res.status})`);
       }
       if (data.hasMore) {
-        window.alert(
+        setUiNotice(
           `Deleted ${data.deletedCount ?? 0} messages. Trash still has more messages; run Empty Trash again.`,
         );
+      } else {
+        setUiNotice(`Deleted ${data.deletedCount ?? 0} messages from Trash.`);
       }
       if (data.workspace) setMailWorkspace(data.workspace);
     } catch (err) {
@@ -686,6 +692,7 @@ export default function MailClient({
     const previousWorkspace = mailWorkspace;
     setPendingAction(action);
     setUiError(null);
+    setUiNotice(null);
     setMailWorkspace((current) =>
       applyOptimisticMessageAction(current, selectedMessage.id, action),
     );
@@ -707,6 +714,16 @@ export default function MailClient({
   }
 
   const threadTitle = selectedThread?.subject || "Mail";
+  const trashDialogAccount =
+    mailWorkspace.accounts.find((account) => account.id === trashDialogAccountId) ??
+    null;
+  const trashDialogCount = trashDialogAccount
+    ? mailWorkspace.threads.filter(
+        (thread) =>
+          thread.accountId === trashDialogAccount.id &&
+          thread.labels.includes("TRASH"),
+      ).length
+    : 0;
   const folderTitle =
     activeFolder?.kind === "custom"
       ? (activeFolder ? folderDisplayName(activeFolder) : "All mail")
@@ -907,7 +924,7 @@ export default function MailClient({
                     type="button"
                     title="Empty Trash"
                     disabled={!!pendingAction}
-                    onClick={() => void emptyTrash(selectedAccount.id)}
+                    onClick={() => setTrashDialogAccountId(selectedAccount.id)}
                     className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-red-500 hover:bg-[var(--card)] disabled:opacity-50"
                   >
                     {pendingAction === "empty-trash" ? (
@@ -947,6 +964,11 @@ export default function MailClient({
           {uiError && (
             <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
               {uiError}
+            </div>
+          )}
+          {uiNotice && (
+            <div className="mt-2 rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1.5 text-xs text-[var(--muted)]">
+              {uiNotice}
             </div>
           )}
           {mailWorkspace.setupError && (
@@ -1158,6 +1180,62 @@ export default function MailClient({
           )}
         </div>
       </main>
+      {trashDialogAccount && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="empty-trash-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !pendingAction) {
+              setTrashDialogAccountId(null);
+            }
+          }}
+        >
+          <div className="w-full max-w-sm rounded-lg border border-[var(--border)] bg-[var(--bg)] p-4 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-500/10 text-red-500">
+                <Trash2 size={18} />
+              </div>
+              <div className="min-w-0">
+                <h2 id="empty-trash-title" className="text-base font-semibold">
+                  Empty Trash?
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+                  This will permanently delete
+                  {trashDialogCount > 0
+                    ? ` ${trashDialogCount} message${trashDialogCount === 1 ? "" : "s"}`
+                    : " all messages"}
+                  {" "}from Trash in {trashDialogAccount.email}. This cannot be
+                  undone.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={!!pendingAction}
+                onClick={() => setTrashDialogAccountId(null)}
+                className="inline-flex h-9 items-center rounded-md border border-[var(--border)] px-3 text-sm font-medium text-[var(--fg)] hover:bg-[var(--card)] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!!pendingAction}
+                onClick={() => void emptyTrash(trashDialogAccount.id)}
+                className="inline-flex h-9 items-center gap-2 rounded-md bg-red-600 px-3 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-60"
+              >
+                {pendingAction === "empty-trash" && (
+                  <Loader2 size={15} className="animate-spin" />
+                )}
+                Empty Trash
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
