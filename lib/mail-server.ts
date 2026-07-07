@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabaseAdmin";
+import sanitizeHtml from "sanitize-html";
 import {
   decryptMailSecret,
   encryptMailSecret,
@@ -34,6 +35,150 @@ const GMAIL_SEARCH_PAGE_SIZE = 50;
 const MAIL_WORKSPACE_THREAD_LIMIT = 500;
 const MAIL_WORKSPACE_MESSAGE_LIMIT = 2000;
 const DEFAULT_GMAIL_CURSOR_KEY = "ALL";
+const SAFE_MAIL_STYLE_VALUE =
+  /^(?!.*(?:url|expression|javascript|vbscript|data:|@import))[-#%.,:/()"'\w\s]+$/i;
+const MAIL_HTML_SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
+  allowedTags: [
+    "a",
+    "abbr",
+    "b",
+    "blockquote",
+    "br",
+    "caption",
+    "center",
+    "code",
+    "col",
+    "colgroup",
+    "dd",
+    "del",
+    "div",
+    "dl",
+    "dt",
+    "em",
+    "font",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "hr",
+    "i",
+    "img",
+    "li",
+    "ol",
+    "p",
+    "pre",
+    "s",
+    "small",
+    "span",
+    "strong",
+    "sub",
+    "sup",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "tr",
+    "u",
+    "ul",
+  ],
+  allowedAttributes: {
+    "*": ["align", "bgcolor", "height", "style", "title", "valign", "width"],
+    a: ["href", "name", "rel", "target", "title"],
+    col: ["span", "width"],
+    colgroup: ["span", "width"],
+    img: ["alt", "height", "loading", "referrerpolicy", "src", "title", "width"],
+    table: [
+      "align",
+      "bgcolor",
+      "border",
+      "cellpadding",
+      "cellspacing",
+      "height",
+      "role",
+      "style",
+      "width",
+    ],
+    td: ["align", "bgcolor", "colspan", "height", "rowspan", "style", "valign", "width"],
+    th: ["align", "bgcolor", "colspan", "height", "rowspan", "style", "valign", "width"],
+  },
+  allowedSchemes: ["http", "https", "mailto"],
+  allowedSchemesByTag: {
+    img: ["http", "https", "data"],
+  },
+  allowProtocolRelative: false,
+  disallowedTagsMode: "discard",
+  enforceHtmlBoundary: false,
+  allowedStyles: {
+    "*": {
+      "background": [SAFE_MAIL_STYLE_VALUE],
+      "background-color": [SAFE_MAIL_STYLE_VALUE],
+      "border": [SAFE_MAIL_STYLE_VALUE],
+      "border-bottom": [SAFE_MAIL_STYLE_VALUE],
+      "border-collapse": [SAFE_MAIL_STYLE_VALUE],
+      "border-left": [SAFE_MAIL_STYLE_VALUE],
+      "border-radius": [SAFE_MAIL_STYLE_VALUE],
+      "border-right": [SAFE_MAIL_STYLE_VALUE],
+      "border-top": [SAFE_MAIL_STYLE_VALUE],
+      "color": [SAFE_MAIL_STYLE_VALUE],
+      "display": [SAFE_MAIL_STYLE_VALUE],
+      "font": [SAFE_MAIL_STYLE_VALUE],
+      "font-family": [SAFE_MAIL_STYLE_VALUE],
+      "font-size": [SAFE_MAIL_STYLE_VALUE],
+      "font-style": [SAFE_MAIL_STYLE_VALUE],
+      "font-weight": [SAFE_MAIL_STYLE_VALUE],
+      "height": [SAFE_MAIL_STYLE_VALUE],
+      "line-height": [SAFE_MAIL_STYLE_VALUE],
+      "margin": [SAFE_MAIL_STYLE_VALUE],
+      "margin-bottom": [SAFE_MAIL_STYLE_VALUE],
+      "margin-left": [SAFE_MAIL_STYLE_VALUE],
+      "margin-right": [SAFE_MAIL_STYLE_VALUE],
+      "margin-top": [SAFE_MAIL_STYLE_VALUE],
+      "max-height": [SAFE_MAIL_STYLE_VALUE],
+      "max-width": [SAFE_MAIL_STYLE_VALUE],
+      "opacity": [SAFE_MAIL_STYLE_VALUE],
+      "overflow": [SAFE_MAIL_STYLE_VALUE],
+      "padding": [SAFE_MAIL_STYLE_VALUE],
+      "padding-bottom": [SAFE_MAIL_STYLE_VALUE],
+      "padding-left": [SAFE_MAIL_STYLE_VALUE],
+      "padding-right": [SAFE_MAIL_STYLE_VALUE],
+      "padding-top": [SAFE_MAIL_STYLE_VALUE],
+      "text-align": [SAFE_MAIL_STYLE_VALUE],
+      "text-decoration": [SAFE_MAIL_STYLE_VALUE],
+      "vertical-align": [SAFE_MAIL_STYLE_VALUE],
+      "white-space": [SAFE_MAIL_STYLE_VALUE],
+      "width": [SAFE_MAIL_STYLE_VALUE],
+      "word-break": [SAFE_MAIL_STYLE_VALUE],
+    },
+  },
+  exclusiveFilter(frame) {
+    return isHiddenMailHtmlElement(frame.attribs);
+  },
+  transformTags: {
+    a: (_tagName, attribs) => ({
+      tagName: "a",
+      attribs: {
+        ...attribs,
+        target: "_blank",
+        rel: "noreferrer noopener",
+      },
+    }),
+    img: (_tagName, attribs) => ({
+      tagName: "img",
+      attribs: {
+        ...attribs,
+        loading: "lazy",
+        referrerpolicy: "no-referrer",
+        style: [attribs.style, "max-width: 100%; height: auto;"]
+          .filter(Boolean)
+          .join(" "),
+      },
+    }),
+  },
+};
 const MAIL_MESSAGE_SUMMARY_SELECT = [
   "id",
   "owner_id",
@@ -410,6 +555,25 @@ function mailAttachments(raw: unknown): MailAttachment[] {
     .filter((item): item is MailAttachment => item !== null);
 }
 
+function isHiddenMailHtmlElement(attribs: Record<string, string>): boolean {
+  if ("hidden" in attribs) return true;
+  if (attribs["aria-hidden"]?.toLowerCase() === "true") return true;
+  const style = (attribs.style ?? "").toLowerCase().replace(/\s+/g, "");
+  if (!style) return false;
+  return (
+    style.includes("display:none") ||
+    style.includes("visibility:hidden") ||
+    style.includes("mso-hide:all") ||
+    /(?:^|;)opacity:0(?:[;}]|$)/.test(style) ||
+    (style.includes("max-height:0") && style.includes("overflow:hidden"))
+  );
+}
+
+function sanitizeMailHtmlBody(html: string | null | undefined): string {
+  if (!html?.trim()) return "";
+  return sanitizeHtml(html, MAIL_HTML_SANITIZE_OPTIONS).trim();
+}
+
 function mapAccount(row: MailAccountRow): MailAccount {
   return {
     id: row.id,
@@ -479,7 +643,7 @@ function mapMessage(row: MailMessageRow): MailMessage {
     subject: row.subject,
     snippet: row.snippet,
     bodyText: typeof row.body_text === "string" ? row.body_text : "",
-    bodyHtml: typeof row.body_html === "string" ? row.body_html : "",
+    bodyHtml: sanitizeMailHtmlBody(row.body_html),
     sentAt: row.sent_at,
     receivedAt: row.received_at,
     unread: row.unread,

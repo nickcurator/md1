@@ -175,6 +175,7 @@ function safeHttpUrl(url: string): string | null {
 
 function normalizeMailDisplayText(input: string): string {
   return cleanMailText(input)
+    .replace(/(?:(?:&zwnj;|&#8204;|\u200c)\s*){3,}/gi, " ")
     .replace(PARENTHESIZED_URL_PATTERN, (match, label, url) => {
       const href = safeHttpUrl(url);
       const text = String(label).replace(/^[\s,.;:!?-]+/, "").trim();
@@ -354,6 +355,17 @@ function renderMailBody(input: string): ReactNode {
     flushList();
   });
   return nodes;
+}
+
+function renderMailHtml(html: string): ReactNode {
+  const clean = html.trim();
+  if (!clean) return null;
+  return (
+    <div
+      className="mail-html text-[15px] leading-7"
+      dangerouslySetInnerHTML={{ __html: clean }}
+    />
+  );
 }
 
 type MailActionResponse = {
@@ -2168,6 +2180,7 @@ export default function MailClient({
                     Loading message...
                   </div>
                 ) : (
+                  renderMailHtml(selectedMessage.bodyHtml) ??
                   renderMailBody(selectedMessage.bodyText || selectedMessage.snippet)
                 )}
               </div>
