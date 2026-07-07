@@ -78,6 +78,8 @@ function folderIcon(kind: MailFolderKind, size = 16) {
 
 const ESSENTIAL_LABELS = new Set(["INBOX", "SENT"]);
 const MAILBOX_ORDER = ["INBOX", "STARRED", "SENT", "DRAFT", "SPAM", "TRASH"];
+const ALL_MAIL_FOLDER_ID = "__all_mail__";
+const ALL_MAIL_EXCLUDED_LABELS = new Set(["TRASH", "SPAM", "DRAFT"]);
 const MAX_COMPOSE_ATTACHMENTS = 8;
 const MAX_COMPOSE_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 const HIDDEN_SYSTEM_LABELS = new Set([
@@ -114,6 +116,10 @@ function categoryLabelName(providerFolderId: string): string | null {
     default:
       return null;
   }
+}
+
+function threadBelongsToAllMail(thread: MailThread): boolean {
+  return !thread.labels.some((label) => ALL_MAIL_EXCLUDED_LABELS.has(label));
 }
 
 function accountName(account: MailAccount): string {
@@ -921,6 +927,7 @@ export default function MailClient({
     }
     if (
       selectedFolderId !== null &&
+      selectedFolderId !== ALL_MAIL_FOLDER_ID &&
       !accountFolders.some((folder) => folder.id === selectedFolderId)
     ) {
       setSelectedFolderId(defaultFolderId);
@@ -939,8 +946,12 @@ export default function MailClient({
   }, [mailWorkspace.accounts, selectedAccountId]);
 
   const activeFolderId = selectedFolderId ?? defaultFolderId;
+  const allMailActive =
+    activeFolderId === ALL_MAIL_FOLDER_ID || activeFolderId === null;
   const activeFolder =
-    accountFolders.find((folder) => folder.id === activeFolderId) ?? null;
+    allMailActive
+      ? null
+      : (accountFolders.find((folder) => folder.id === activeFolderId) ?? null);
   const activeLoadMoreKey = selectedAccount
     ? `load-more:${selectedAccount.id}:${gmailSyncCursorKey(activeFolder)}`
     : null;
@@ -954,6 +965,17 @@ export default function MailClient({
       : null;
   const searchingMail =
     activeSearchKey !== null && pendingAction === activeSearchKey;
+
+  const allMailLoadedThreads = useMemo(() => {
+    if (!selectedAccount) return [];
+    return mailWorkspace.threads.filter(
+      (thread) =>
+        thread.accountId === selectedAccount.id && threadBelongsToAllMail(thread),
+    );
+  }, [mailWorkspace.threads, selectedAccount]);
+  const allMailUnreadLoadedCount = allMailLoadedThreads.filter(
+    (thread) => thread.unread,
+  ).length;
 
   const messageSearchTextByThreadId = useMemo(() => {
     const map = new Map<string, string>();
@@ -979,7 +1001,9 @@ export default function MailClient({
     if (!selectedAccount) return [];
     return mailWorkspace.threads.filter((thread) => {
       if (thread.accountId !== selectedAccount.id) return false;
+      if (allMailActive && !threadBelongsToAllMail(thread)) return false;
       if (
+        !allMailActive &&
         activeFolder?.providerFolderId !== "TRASH" &&
         thread.labels.includes("TRASH")
       ) {
@@ -1004,6 +1028,7 @@ export default function MailClient({
     });
   }, [
     activeFolder,
+    allMailActive,
     normalizedQuery,
     selectedAccount,
     mailWorkspace.threads,
@@ -1819,11 +1844,13 @@ export default function MailClient({
       ).length
     : 0;
   const folderTitle =
-    activeFolder?.kind === "custom"
+    allMailActive
+      ? "All Mail"
+      : activeFolder?.kind === "custom"
       ? (activeFolder ? folderDisplayName(activeFolder) : "All mail")
       : activeFolder
         ? folderKindLabel(activeFolder.kind)
-        : "All mail";
+        : "All Mail";
   const composeAccount = compose
     ? mailWorkspace.accounts.find((account) => account.id === compose.accountId) ??
       null
@@ -1840,7 +1867,18 @@ export default function MailClient({
           ? "Draft"
           : "New message";
   const activeFolderSummary =
-    selectedAccount && activeFolder
+    selectedAccount && allMailActive
+      ? normalizedQuery
+        ? `${plural(visibleThreads.length, "loaded thread")} match`
+        : [
+            `${plural(allMailLoadedThreads.length, "loaded thread")}`,
+            allMailUnreadLoadedCount > 0
+              ? `${compactCount(allMailUnreadLoadedCount)} unread loaded`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")
+      : selectedAccount && activeFolder
       ? normalizedQuery
         ? `${plural(visibleThreads.length, "loaded thread")} match`
         : [
@@ -1912,6 +1950,46 @@ export default function MailClient({
               Gmail {compactCount(totalCount)}
             </span>
           ) : null}
+        </span>
+      </button>
+    );
+  }
+
+  function renderAllMailButton() {
+    const loadedCount = allMailLoadedThreads.length;
+    return (
+      <button
+        key={ALL_MAIL_FOLDER_ID}
+        type="button"
+        onClick={() => {
+          setSelectedFolderId(ALL_MAIL_FOLDER_ID);
+          setSelectedThreadId(null);
+        }}
+        className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
+          allMailActive
+            ? "bg-[var(--card)] text-[var(--fg)]"
+            : "text-[var(--muted)] hover:bg-[var(--card)]/80 hover:text-[var(--fg)]"
+        }`}
+      >
+        <Archive size={16} />
+        <span className="min-w-0 flex-1 truncate">All Mail</span>
+        <span className="flex shrink-0 items-center gap-1">
+          {allMailUnreadLoadedCount > 0 && (
+            <span
+              title={`${allMailUnreadLoadedCount} unread loaded in md1`}
+              className="rounded-full bg-[var(--fg)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--bg)]"
+            >
+              {compactCount(allMailUnreadLoadedCount)} unread
+            </span>
+          )}
+          {loadedCount > 0 && (
+            <span
+              title={`${plural(loadedCount, "thread")} loaded in md1`}
+              className="text-xs tabular-nums text-[var(--muted)]"
+            >
+              {compactCount(loadedCount)}
+            </span>
+          )}
         </span>
       </button>
     );
@@ -2025,16 +2103,15 @@ export default function MailClient({
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {selectedAccount ? (
             <div className="space-y-4">
-              {accountFolderGroups.mailboxes.length > 0 && (
-                <div>
-                  <div className="mb-1 px-2 text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-                    Mailboxes
-                  </div>
-                  <div className="space-y-0.5">
-                    {accountFolderGroups.mailboxes.map(renderFolderButton)}
-                  </div>
+              <div>
+                <div className="mb-1 px-2 text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
+                  Mailboxes
                 </div>
-              )}
+                <div className="space-y-0.5">
+                  {renderAllMailButton()}
+                  {accountFolderGroups.mailboxes.map(renderFolderButton)}
+                </div>
+              </div>
               {accountFolderGroups.categories.length > 0 && (
                 <div>
                   <div className="mb-1 px-2 text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
@@ -2114,7 +2191,7 @@ export default function MailClient({
                 )}
                 <button
                   type="button"
-                  title="Sync"
+                  title="Refresh"
                   disabled={syncingAccountId === selectedAccount.id}
                   onClick={() =>
                     void syncAccount(selectedAccount.id, {
