@@ -29,6 +29,7 @@ import {
   type MailThread,
   type MailWorkspace,
 } from "@/lib/mail";
+import { cleanMailText } from "@/lib/mail-text";
 import DriveProfileButton from "../DriveProfileButton";
 
 function formatDate(iso: string | null): string {
@@ -142,6 +143,18 @@ export default function MailClient({
     if (!selectedAccount) return counts;
     for (const thread of mailWorkspace.threads) {
       if (thread.accountId !== selectedAccount.id) continue;
+      for (const label of thread.labels) {
+        counts.set(label, (counts.get(label) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [selectedAccount, mailWorkspace.threads]);
+
+  const accountUnreadLabelCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    if (!selectedAccount) return counts;
+    for (const thread of mailWorkspace.threads) {
+      if (thread.accountId !== selectedAccount.id || !thread.unread) continue;
       for (const label of thread.labels) {
         counts.set(label, (counts.get(label) ?? 0) + 1);
       }
@@ -385,6 +398,7 @@ export default function MailClient({
   function renderFolderButton(folder: MailFolder) {
     const selected = activeFolderId === folder.id;
     const count = accountThreadLabelCounts.get(folder.providerFolderId) ?? 0;
+    const unreadCount = accountUnreadLabelCounts.get(folder.providerFolderId) ?? 0;
     return (
       <button
         key={folder.id}
@@ -400,7 +414,15 @@ export default function MailClient({
         <span className="min-w-0 flex-1 truncate">
           {folderDisplayName(folder)}
         </span>
-        {count > 0 && <span className="text-xs tabular-nums">{count}</span>}
+        {unreadCount > 0 ? (
+          <span className="rounded-full bg-[var(--fg)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--bg)]">
+            {unreadCount}
+          </span>
+        ) : count > 0 ? (
+          <span className="text-xs tabular-nums text-[var(--muted)]">
+            {count}
+          </span>
+        ) : null}
       </button>
     );
   }
@@ -642,13 +664,22 @@ export default function MailClient({
                     <button
                       type="button"
                       onClick={() => setSelectedThreadId(thread.id)}
+                      aria-label={`${thread.unread ? "Unread: " : ""}${thread.subject}`}
                       className={`w-full rounded-lg px-3 py-2 text-left transition-colors ${
                         selected
                           ? "bg-[var(--card)] ring-1 ring-[var(--border)]"
-                          : "hover:bg-[var(--card)]/80"
+                          : thread.unread
+                            ? "bg-[var(--card)]/35 hover:bg-[var(--card)]/80"
+                            : "hover:bg-[var(--card)]/80"
                       }`}
                     >
                       <span className="flex items-start gap-2">
+                        <span
+                          aria-hidden="true"
+                          className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                            thread.unread ? "bg-blue-400" : "bg-transparent"
+                          }`}
+                        />
                         <span className="min-w-0 flex-1">
                           <span
                             className={`block truncate text-sm ${
@@ -679,7 +710,7 @@ export default function MailClient({
                           />
                         )}
                         <span className="line-clamp-2 text-xs leading-relaxed text-[var(--muted)]">
-                          {thread.snippet}
+                          {cleanMailText(thread.snippet)}
                         </span>
                       </span>
                     </button>
@@ -802,7 +833,7 @@ export default function MailClient({
               </header>
 
               <div className="whitespace-pre-wrap py-6 text-[15px] leading-7">
-                {selectedMessage.bodyText || selectedMessage.snippet}
+                {cleanMailText(selectedMessage.bodyText || selectedMessage.snippet)}
               </div>
             </article>
           )}

@@ -3,6 +3,7 @@ import {
   decryptMailSecret,
   encryptMailSecret,
 } from "@/lib/mail-crypto-server";
+import { cleanMailText } from "@/lib/mail-text";
 import type {
   MailAccount,
   MailAccountStatus,
@@ -785,16 +786,14 @@ function header(headers: GmailHeader[] | undefined, name: string): string {
 }
 
 function stripHtml(html: string): string {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/\s+/g, " ")
-    .trim();
+  return cleanMailText(
+    html
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(?:div|p|tr|li|h[1-6])>/gi, "\n")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<[^>]+>/g, " "),
+  );
 }
 
 function parseAddressList(value: string): MailRecipient[] {
@@ -860,7 +859,7 @@ function parseGmailMessage(
 
   const textPart = parts.find((p) => p.mimeType === "text/plain");
   const htmlPart = parts.find((p) => p.mimeType === "text/html");
-  const bodyText = decodeGmailData(textPart?.body?.data).trim();
+  const bodyText = cleanMailText(decodeGmailData(textPart?.body?.data));
   const bodyHtml = decodeGmailData(htmlPart?.body?.data).trim();
 
   return {
@@ -868,7 +867,7 @@ function parseGmailMessage(
     providerThreadId: message.threadId,
     folderId: primaryFolderId(labels, folderIdByProviderId),
     subject,
-    snippet: message.snippet ?? "",
+    snippet: cleanMailText(message.snippet ?? ""),
     from,
     to,
     cc,
