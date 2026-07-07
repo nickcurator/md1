@@ -385,6 +385,58 @@ function renderMailHtml(html: string): ReactNode {
   );
 }
 
+function renderMessageAttachments(message: MailMessage): ReactNode {
+  if (message.attachments.length === 0) return null;
+  return (
+    <section className="border-t border-[var(--border)] pt-4">
+      <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+        <Paperclip size={15} className="text-[var(--muted)]" />
+        <span>
+          {message.attachments.length} attachment
+          {message.attachments.length === 1 ? "" : "s"}
+        </span>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {message.attachments.map((attachment) => {
+          const href = attachmentDownloadHref(message, attachment);
+          const content = (
+            <>
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[var(--border)] text-[var(--muted)]">
+                <Paperclip size={16} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">
+                  {attachment.filename}
+                </span>
+                <span className="block truncate text-xs text-[var(--muted)]">
+                  {attachmentLabel(attachment)}
+                </span>
+              </span>
+              <Download size={15} className="shrink-0 text-[var(--muted)]" />
+            </>
+          );
+          return href ? (
+            <a
+              key={attachment.id}
+              href={href}
+              className="flex min-w-0 items-center gap-2 rounded-md border border-[var(--border)] p-2 hover:bg-[var(--card)]"
+            >
+              {content}
+            </a>
+          ) : (
+            <div
+              key={attachment.id}
+              className="flex min-w-0 items-center gap-2 rounded-md border border-[var(--border)] p-2 opacity-70"
+            >
+              {content}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 type MailActionResponse = {
   message?: MailMessage;
   thread?: MailThread | null;
@@ -734,9 +786,9 @@ export default function MailClient({
   const [compose, setCompose] = useState<ComposeState | null>(null);
   const [showCcBcc, setShowCcBcc] = useState(false);
   const composeFileInputRef = useRef<HTMLInputElement | null>(null);
-  const [messageDetailLoadingId, setMessageDetailLoadingId] = useState<
-    string | null
-  >(null);
+  const [messageDetailLoadingIds, setMessageDetailLoadingIds] = useState<
+    Set<string>
+  >(() => new Set());
   const [loadedMessageDetailIds, setLoadedMessageDetailIds] = useState<
     Set<string>
   >(() => new Set());
@@ -948,21 +1000,30 @@ export default function MailClient({
     visibleThreads.find((thread) => thread.id === selectedThreadId) ??
     visibleThreads[0] ??
     null;
-  const selectedMessages = selectedThread
-    ? mailWorkspace.messages
-        .filter((message) => message.threadId === selectedThread.id)
-        .sort((a, b) => {
-          const aTime = a.receivedAt ? new Date(a.receivedAt).getTime() : 0;
-          const bTime = b.receivedAt ? new Date(b.receivedAt).getTime() : 0;
-          return aTime - bTime;
-        })
-    : [];
+  const selectedMessages = useMemo(
+    () =>
+      selectedThread
+        ? mailWorkspace.messages
+            .filter((message) => message.threadId === selectedThread.id)
+            .sort((a, b) => {
+              const aTime = a.receivedAt
+                ? new Date(a.receivedAt).getTime()
+                : 0;
+              const bTime = b.receivedAt
+                ? new Date(b.receivedAt).getTime()
+                : 0;
+              return aTime - bTime;
+            })
+        : [],
+    [mailWorkspace.messages, selectedThread],
+  );
   const selectedMessage = selectedMessages[selectedMessages.length - 1] ?? null;
+  const messageBodyIsLoading = (message: MailMessage) =>
+    messageDetailLoadingIds.has(message.id) &&
+    !message.bodyText &&
+    !message.bodyHtml;
   const messageBodyLoading =
-    selectedMessage !== null &&
-    messageDetailLoadingId === selectedMessage.id &&
-    !selectedMessage.bodyText &&
-    !selectedMessage.bodyHtml;
+    selectedMessage !== null && messageBodyIsLoading(selectedMessage);
   const selectedIsDraft = isDraftMessage(selectedMessage);
   const selectedBulkThreads = visibleThreads.filter((thread) =>
     selectedThreadIds.has(thread.id),
@@ -992,64 +1053,82 @@ export default function MailClient({
     (pendingAction?.startsWith("bulk-move:") ?? false);
 
   useEffect(() => {
-    if (
-      !selectedMessage ||
-      selectedMessage.bodyText ||
-      selectedMessage.bodyHtml ||
-      loadedMessageDetailIds.has(selectedMessage.id)
-    ) {
-      return;
-    }
+    const missingMessages = selectedMessages.filter(
+      (message) =>
+        !message.bodyText &&
+        !message.bodyHtml &&
+        !loadedMessageDetailIds.has(message.id) &&
+        !messageDetailLoadingIds.has(message.id),
+    );
+    if (missingMessages.length === 0) return;
 
     let cancelled = false;
-    setMessageDetailLoadingId(selectedMessage.id);
-    fetch(`/api/mail/messages/${encodeURIComponent(selectedMessage.id)}`)
-      .then(async (res) => {
-        const data = (await res.json().catch(() => ({}))) as MailMessageDetailResponse;
-        if (!res.ok) {
-          throw new Error(data.error || `Message load failed (${res.status})`);
-        }
-        const detailMessage = data.message;
-        if (!detailMessage || cancelled) return;
-        setLoadedMessageDetailIds((current) => {
-          if (current.has(detailMessage.id)) return current;
-          const next = new Set(current);
-          next.add(detailMessage.id);
-          return next;
-        });
-        setMailWorkspace((current) => ({
-          ...current,
-          messages: current.messages.some(
-            (message) => message.id === detailMessage.id,
-          )
-            ? current.messages.map((message) =>
-                message.id === detailMessage.id ? detailMessage : message,
-              )
-            : [detailMessage, ...current.messages],
-        }));
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setUiError(err instanceof Error ? err.message : "Message load failed");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setMessageDetailLoadingId((current) =>
-            current === selectedMessage.id ? null : current,
+    const ids = missingMessages.map((message) => message.id);
+    setMessageDetailLoadingIds((current) => {
+      const next = new Set(current);
+      for (const id of ids) next.add(id);
+      return next;
+    });
+
+    void Promise.all(
+      missingMessages.map(async (message) => {
+        try {
+          const res = await fetch(
+            `/api/mail/messages/${encodeURIComponent(message.id)}`,
           );
+          const data = (await res
+            .json()
+            .catch(() => ({}))) as MailMessageDetailResponse;
+          if (!res.ok) {
+            throw new Error(data.error || `Message load failed (${res.status})`);
+          }
+          const detailMessage = data.message;
+          if (!detailMessage || cancelled) return;
+          setLoadedMessageDetailIds((current) => {
+            if (current.has(detailMessage.id)) return current;
+            const next = new Set(current);
+            next.add(detailMessage.id);
+            return next;
+          });
+          setMailWorkspace((current) => ({
+            ...current,
+            messages: current.messages.some(
+              (currentMessage) => currentMessage.id === detailMessage.id,
+            )
+              ? current.messages.map((currentMessage) =>
+                  currentMessage.id === detailMessage.id
+                    ? detailMessage
+                    : currentMessage,
+                )
+              : [detailMessage, ...current.messages],
+          }));
+        } catch (err) {
+          if (!cancelled) {
+            setLoadedMessageDetailIds((current) => {
+              if (current.has(message.id)) return current;
+              const next = new Set(current);
+              next.add(message.id);
+              return next;
+            });
+            setUiError(err instanceof Error ? err.message : "Message load failed");
+          }
+        } finally {
+          if (!cancelled) {
+            setMessageDetailLoadingIds((current) => {
+              if (!current.has(message.id)) return current;
+              const next = new Set(current);
+              next.delete(message.id);
+              return next;
+            });
+          }
         }
-      });
+      }),
+    );
 
     return () => {
       cancelled = true;
     };
-  }, [
-    loadedMessageDetailIds,
-    selectedMessage,
-    selectedMessage?.bodyHtml,
-    selectedMessage?.bodyText,
-  ]);
+  }, [loadedMessageDetailIds, messageDetailLoadingIds, selectedMessages]);
 
   function toggleThreadSelected(threadId: string) {
     setSelectedThreadIds((current) => {
@@ -2341,100 +2420,61 @@ export default function MailClient({
           ) : (
             <article className="mx-auto max-w-3xl px-6 py-8">
               <header className="border-b border-[var(--border)] pb-5">
-                <h1 className="text-2xl font-semibold">{selectedMessage.subject}</h1>
-                <div className="mt-4 flex flex-col gap-1 text-sm">
-                  <div>
-                    <span className="text-[var(--muted)]">From </span>
-                    <span>{messageSender(selectedMessage)}</span>
-                    {selectedMessage.fromEmail && (
-                      <span className="text-[var(--muted)]">
-                        {" "}
-                        &lt;{selectedMessage.fromEmail}&gt;
-                      </span>
-                    )}
-                  </div>
-                  {selectedMessage.toRecipients.length > 0 && (
-                    <div className="truncate">
-                      <span className="text-[var(--muted)]">To </span>
-                      <span>{messageRecipients(selectedMessage.toRecipients)}</span>
-                    </div>
-                  )}
-                  <div className="text-[var(--muted)]">
-                    {selectedMessage.receivedAt
-                      ? new Intl.DateTimeFormat(undefined, {
-                          dateStyle: "medium",
-                          timeStyle: "short",
-                        }).format(new Date(selectedMessage.receivedAt))
-                      : ""}
-                  </div>
-                </div>
+                <h1 className="text-2xl font-semibold">{threadTitle}</h1>
+                <p className="mt-2 text-sm text-[var(--muted)]">
+                  {plural(selectedMessages.length, "message")} in this thread
+                </p>
               </header>
 
-              <div className="py-6 text-[15px] leading-7">
-                {messageBodyLoading ? (
-                  <div className="flex items-center gap-2 text-sm text-[var(--muted)]">
-                    <Loader2 size={15} className="animate-spin" />
-                    Loading message...
-                  </div>
-                ) : (
-                  renderMailHtml(selectedMessage.bodyHtml) ??
-                  renderMailBody(selectedMessage.bodyText || selectedMessage.snippet)
-                )}
-              </div>
-              {selectedMessage.attachments.length > 0 && (
-                <section className="border-t border-[var(--border)] pt-4">
-                  <div className="mb-2 flex items-center gap-2 text-sm font-medium">
-                    <Paperclip size={15} className="text-[var(--muted)]" />
-                    <span>
-                      {selectedMessage.attachments.length} attachment
-                      {selectedMessage.attachments.length === 1 ? "" : "s"}
-                    </span>
-                  </div>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {selectedMessage.attachments.map((attachment) => {
-                      const href = attachmentDownloadHref(
-                        selectedMessage,
-                        attachment,
-                      );
-                      const content = (
-                        <>
-                          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[var(--border)] text-[var(--muted)]">
-                            <Paperclip size={16} />
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-medium">
-                              {attachment.filename}
+              <div className="divide-y divide-[var(--border)]">
+                {selectedMessages.map((message) => {
+                  const loadingBody = messageBodyIsLoading(message);
+                  return (
+                    <section key={message.id} className="py-6">
+                      <header className="mb-4 flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <span className="truncate text-sm font-semibold">
+                              {messageSender(message)}
                             </span>
-                            <span className="block truncate text-xs text-[var(--muted)]">
-                              {attachmentLabel(attachment)}
-                            </span>
-                          </span>
-                          <Download
-                            size={15}
-                            className="shrink-0 text-[var(--muted)]"
-                          />
-                        </>
-                      );
-                      return href ? (
-                        <a
-                          key={attachment.id}
-                          href={href}
-                          className="flex min-w-0 items-center gap-2 rounded-md border border-[var(--border)] p-2 hover:bg-[var(--card)]"
-                        >
-                          {content}
-                        </a>
-                      ) : (
-                        <div
-                          key={attachment.id}
-                          className="flex min-w-0 items-center gap-2 rounded-md border border-[var(--border)] p-2 opacity-70"
-                        >
-                          {content}
+                            {message.fromEmail && (
+                              <span className="truncate text-xs text-[var(--muted)]">
+                                &lt;{message.fromEmail}&gt;
+                              </span>
+                            )}
+                          </div>
+                          {message.toRecipients.length > 0 && (
+                            <div className="mt-1 truncate text-xs text-[var(--muted)]">
+                              To {messageRecipients(message.toRecipients)}
+                            </div>
+                          )}
                         </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              )}
+                        <time className="shrink-0 text-xs text-[var(--muted)]">
+                          {message.receivedAt
+                            ? new Intl.DateTimeFormat(undefined, {
+                                dateStyle: "medium",
+                                timeStyle: "short",
+                              }).format(new Date(message.receivedAt))
+                            : ""}
+                        </time>
+                      </header>
+
+                      <div className="text-[15px] leading-7">
+                        {loadingBody ? (
+                          <div className="flex items-center gap-2 text-sm text-[var(--muted)]">
+                            <Loader2 size={15} className="animate-spin" />
+                            Loading message...
+                          </div>
+                        ) : (
+                          renderMailHtml(message.bodyHtml) ??
+                          renderMailBody(message.bodyText || message.snippet)
+                        )}
+                      </div>
+                      {renderMessageAttachments(message)}
+                    </section>
+                  );
+                })}
+              </div>
             </article>
           )}
         </div>
