@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { BarChart3, Key, LogOut, Mail, Search, Sparkles, User } from "lucide-react";
+import { BarChart3, Key, LogOut, Search, Sparkles, User } from "lucide-react";
 import type { DriveUser } from "@/lib/drive-users-server";
 import { useWhatsNew } from "@/app/WhatsNewProvider";
 
@@ -116,14 +116,6 @@ export default function DriveProfileButton({
                 New
               </span>
             )}
-          </Link>
-          <Link
-            href="/mail"
-            onClick={() => setOpen(false)}
-            className="flex w-full items-center gap-3 px-3 py-2.5 text-sm transition-colors hover:bg-[var(--card)]"
-          >
-            <Mail size={18} />
-            Mail
           </Link>
           <Link
             href="/settings"

@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { FileText, Folder, FolderPlus, Mail, Plus, Trash2, Upload } from "lucide-react";
+import { FileText, Folder, FolderPlus, Plus, Trash2, Upload } from "lucide-react";
 import AppLogo from "@/components/AppLogo";
 import type { DriveUser } from "@/lib/drive-users-server";
 import type { DriveFolder, SharedDoc } from "@/lib/shared-docs";
@@ -92,13 +91,6 @@ export default function DriveSidebar({
           <FileText size={15} />
           <span className="min-w-0 flex-1 truncate">Notes</span>
         </div>
-        <Link
-          href="/mail"
-          className="mt-0.5 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)]"
-        >
-          <Mail size={15} />
-          <span className="min-w-0 flex-1 truncate">Mail</span>
-        </Link>
       </div>
 
       <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-3 py-2.5">

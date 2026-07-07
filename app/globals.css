@@ -68,40 +68,6 @@ body {
   display: none;
 }
 
-.mail-html {
-  color: var(--fg);
-  overflow-wrap: anywhere;
-}
-
-.mail-html a {
-  color: #60a5fa;
-  text-decoration: underline;
-  text-decoration-color: rgb(96 165 250 / 0.45);
-  text-underline-offset: 2px;
-}
-
-.mail-html a:hover {
-  color: #93c5fd;
-  text-decoration-color: #93c5fd;
-}
-
-.mail-html img {
-  max-width: 100%;
-  height: auto;
-}
-
-.mail-html table {
-  max-width: 100%;
-  border-collapse: initial;
-}
-
-.mail-html blockquote {
-  margin-left: 0;
-  border-left: 2px solid var(--border);
-  padding-left: 1rem;
-  color: var(--muted);
-}
-
 @keyframes sheet-up {
   from {
     transform: translateY(100%);
