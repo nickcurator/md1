@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDriveUserFromRequest } from "@/lib/drive-auth-server";
-import {
-  applyMailMessageAction,
-  listMailWorkspace,
-  type MailMessageAction,
-} from "@/lib/mail-server";
+import type { MailMessageAction } from "@/lib/mail";
+import { applyMailMessageAction } from "@/lib/mail-server";
 
 export const dynamic = "force-dynamic";
 
@@ -48,13 +45,12 @@ export async function POST(
 
   const { id } = await params;
   try {
-    await applyMailMessageAction({
+    const result = await applyMailMessageAction({
       ownerId: user.id,
       messageId: id,
       action: body.action as MailMessageAction,
     });
-    const workspace = await listMailWorkspace(user.id);
-    return NextResponse.json({ workspace });
+    return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Action failed" },

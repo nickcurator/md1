@@ -16,6 +16,14 @@ export type MailFolderKind =
   | "starred"
   | "custom";
 
+export type MailMessageAction =
+  | "mark_read"
+  | "mark_unread"
+  | "archive"
+  | "trash"
+  | "star"
+  | "unstar";
+
 export type MailRecipient = {
   email: string;
   name: string;
@@ -138,4 +146,36 @@ export function folderKindLabel(kind: MailFolderKind): string {
 
 export function formatRecipient(recipient: MailRecipient): string {
   return recipient.name || recipient.email;
+}
+
+export function applyMailActionToLabels(
+  labels: string[],
+  action: MailMessageAction,
+): {
+  labels: string[];
+  unread: boolean;
+  starred: boolean;
+} {
+  const nextLabels = new Set(labels);
+
+  if (action === "mark_read") {
+    nextLabels.delete("UNREAD");
+  } else if (action === "mark_unread") {
+    nextLabels.add("UNREAD");
+  } else if (action === "archive") {
+    nextLabels.delete("INBOX");
+  } else if (action === "trash") {
+    nextLabels.delete("INBOX");
+    nextLabels.add("TRASH");
+  } else if (action === "star") {
+    nextLabels.add("STARRED");
+  } else if (action === "unstar") {
+    nextLabels.delete("STARRED");
+  }
+
+  return {
+    labels: [...nextLabels],
+    unread: nextLabels.has("UNREAD"),
+    starred: nextLabels.has("STARRED"),
+  };
 }

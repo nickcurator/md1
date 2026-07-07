@@ -19,12 +19,14 @@ import {
 import AppLogo from "@/components/AppLogo";
 import type { DriveUser } from "@/lib/drive-users-server";
 import {
+  applyMailActionToLabels,
   folderKindLabel,
   formatRecipient,
   providerLabel,
   type MailAccount,
   type MailFolder,
   type MailFolderKind,
+  type MailMessageAction,
   type MailMessage,
   type MailThread,
   type MailWorkspace,
@@ -106,6 +108,122 @@ function messageSender(message: MailMessage): string {
 
 function messageRecipients(recipients: MailMessage["toRecipients"]): string {
   return recipients.map(formatRecipient).join(", ");
+}
+
+type MailActionResponse = {
+  message?: MailMessage;
+  thread?: MailThread | null;
+  workspace?: MailWorkspace;
+  error?: string;
+};
+
+function primaryFolderIdForLabels(
+  workspace: MailWorkspace,
+  accountId: string,
+  labels: string[],
+): string | null {
+  for (const providerFolderId of [
+    "INBOX",
+    "SENT",
+    "DRAFT",
+    "STARRED",
+    "SPAM",
+    "TRASH",
+  ]) {
+    if (!labels.includes(providerFolderId)) continue;
+    return (
+      workspace.folders.find(
+        (folder) =>
+          folder.accountId === accountId &&
+          folder.providerFolderId === providerFolderId,
+      )?.id ?? null
+    );
+  }
+  return null;
+}
+
+function latestMessage(messages: MailMessage[]): MailMessage | null {
+  return messages.reduce<MailMessage | null>((latest, message) => {
+    if (!latest) return message;
+    const latestTime = latest.receivedAt ? new Date(latest.receivedAt).getTime() : 0;
+    const messageTime = message.receivedAt
+      ? new Date(message.receivedAt).getTime()
+      : 0;
+    return messageTime >= latestTime ? message : latest;
+  }, null);
+}
+
+function applyOptimisticMessageAction(
+  workspace: MailWorkspace,
+  messageId: string,
+  action: MailMessageAction,
+): MailWorkspace {
+  const target = workspace.messages.find((message) => message.id === messageId);
+  if (!target) return workspace;
+
+  const next = applyMailActionToLabels(target.labels, action);
+  const now = new Date().toISOString();
+  const messages = workspace.messages.map((message) => {
+    if (message.id !== messageId) return message;
+    return {
+      ...message,
+      folderId: primaryFolderIdForLabels(workspace, message.accountId, next.labels),
+      labels: next.labels,
+      unread: next.unread,
+      starred: next.starred,
+      updatedAt: now,
+    };
+  });
+
+  const threadMessages = target.threadId
+    ? messages.filter((message) => message.threadId === target.threadId)
+    : [];
+  const latest = latestMessage(threadMessages);
+  const threads = workspace.threads.map((thread) => {
+    if (thread.id !== target.threadId || !latest) return thread;
+    return {
+      ...thread,
+      folderId: latest.folderId,
+      labels: latest.labels,
+      unread: threadMessages.some((message) => message.unread),
+      starred: threadMessages.some((message) => message.starred),
+      updatedAt: now,
+    };
+  });
+
+  return { ...workspace, messages, threads };
+}
+
+function mergeMailActionResponse(
+  workspace: MailWorkspace,
+  response: MailActionResponse,
+): MailWorkspace {
+  if (response.workspace) return response.workspace;
+  if (!response.message) return workspace;
+
+  const messageExists = workspace.messages.some(
+    (message) => message.id === response.message?.id,
+  );
+  const messages = messageExists
+    ? workspace.messages.map((message) =>
+        message.id === response.message?.id ? response.message : message,
+      )
+    : [...workspace.messages, response.message];
+
+  if (response.thread === undefined) return { ...workspace, messages };
+
+  const threads =
+    response.thread === null
+      ? workspace.threads.filter(
+          (thread) => thread.id !== response.message?.threadId,
+        )
+      : workspace.threads.some((thread) => thread.id === response.thread?.id)
+        ? workspace.threads.map((thread) =>
+            thread.id === response.thread?.id ? response.thread : thread,
+          )
+        : [...workspace.threads, response.thread];
+
+  return { ...workspace, messages, threads };
 }
 
 export default function MailClient({
@@ -364,23 +482,25 @@ export default function MailClient({
     }
   }
 
-  async function runMessageAction(action: string) {
+  async function runMessageAction(action: MailMessageAction) {
     if (!selectedMessage) return;
+    const previousWorkspace = mailWorkspace;
     setPendingAction(action);
     setUiError(null);
+    setMailWorkspace((current) =>
+      applyOptimisticMessageAction(current, selectedMessage.id, action),
+    );
     try {
       const res = await fetch(`/api/mail/messages/${selectedMessage.id}/action`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action }),
       });
-      const data = (await res.json().catch(() => ({}))) as {
-        workspace?: MailWorkspace;
-        error?: string;
-      };
+      const data = (await res.json().catch(() => ({}))) as MailActionResponse;
       if (!res.ok) throw new Error(data.error || `Action failed (${res.status})`);
-      if (data.workspace) setMailWorkspace(data.workspace);
+      setMailWorkspace((current) => mergeMailActionResponse(current, data));
     } catch (err) {
+      setMailWorkspace(previousWorkspace);
       setUiError(err instanceof Error ? err.message : "Action failed");
     } finally {
       setPendingAction(null);

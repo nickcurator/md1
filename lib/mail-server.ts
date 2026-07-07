@@ -3,6 +3,7 @@ import {
   decryptMailSecret,
   encryptMailSecret,
 } from "@/lib/mail-crypto-server";
+import { applyMailActionToLabels } from "@/lib/mail";
 import { cleanMailText } from "@/lib/mail-text";
 import type {
   MailAccount,
@@ -10,6 +11,7 @@ import type {
   MailFolder,
   MailFolderKind,
   MailMessage,
+  MailMessageAction,
   MailProvider,
   MailRecipient,
   MailThread,
@@ -1263,78 +1265,70 @@ async function removeLocalDeletedMessages(input: {
   }
 }
 
-async function updateLocalMessageFromGmail(input: {
+export type MailMessageActionResult = {
+  message: MailMessage;
+  thread: MailThread | null;
+};
+
+async function updateLocalMessageAfterAction(input: {
   ownerId: string;
   accountId: string;
-  threadId: string | null;
-  messageId: string;
-  accessToken: string;
-  providerMessageId: string;
-}): Promise<void> {
+  message: MailMessageRow;
+  action: MailMessageAction;
+}): Promise<MailMessageActionResult> {
   const db = createAdminClient();
   const folderIds = await listMailFolderIds({
     ownerId: input.ownerId,
     accountId: input.accountId,
   });
-  const gmailMessage = await fetchGmailMessageWithRetry(
-    input.accessToken,
-    input.providerMessageId,
+  const next = applyMailActionToLabels(
+    stringArray(input.message.labels),
+    input.action,
   );
-  const parsed = parseGmailMessage(gmailMessage, folderIds);
   const now = new Date().toISOString();
 
-  const { error: updateMessageError } = await db
+  const { data: updatedMessage, error: updateMessageError } = await db
     .from("mail_messages")
     .update({
-      folder_id: parsed.folderId,
-      subject: parsed.subject,
-      snippet: parsed.snippet,
-      body_text: parsed.bodyText,
-      body_html: parsed.bodyHtml,
-      sent_at: parsed.sentAt,
-      received_at: parsed.receivedAt,
-      unread: parsed.unread,
-      starred: parsed.starred,
-      has_attachments: parsed.hasAttachments,
-      labels: parsed.labels,
+      folder_id: primaryFolderId(next.labels, folderIds),
+      unread: next.unread,
+      starred: next.starred,
+      labels: next.labels,
       updated_at: now,
     })
-    .eq("id", input.messageId)
-    .eq("owner_id", input.ownerId);
+    .eq("id", input.message.id)
+    .eq("owner_id", input.ownerId)
+    .select("*")
+    .single();
   if (updateMessageError) throw updateMessageError;
 
-  if (input.threadId) {
-    const { error: updateThreadError } = await db
+  let thread: MailThread | null = null;
+  if (input.message.thread_id) {
+    await refreshOrRemoveThread({
+      ownerId: input.ownerId,
+      threadId: input.message.thread_id,
+    });
+    const { data: updatedThread, error: updatedThreadError } = await db
       .from("mail_threads")
-      .update({
-        folder_id: parsed.folderId,
-        subject: parsed.subject,
-        snippet: parsed.snippet,
-        last_message_at: parsed.receivedAt,
-        unread: parsed.unread,
-        starred: parsed.starred,
-        labels: parsed.labels,
-        updated_at: now,
-      })
-      .eq("id", input.threadId)
-      .eq("owner_id", input.ownerId);
-    if (updateThreadError) throw updateThreadError;
+      .select("*")
+      .eq("id", input.message.thread_id)
+      .eq("owner_id", input.ownerId)
+      .maybeSingle();
+    if (updatedThreadError) throw updatedThreadError;
+    thread = updatedThread ? mapThread(updatedThread as MailThreadRow) : null;
   }
-}
 
-export type MailMessageAction =
-  | "mark_read"
-  | "mark_unread"
-  | "archive"
-  | "trash"
-  | "star"
-  | "unstar";
+  return {
+    message: mapMessage(updatedMessage as MailMessageRow),
+    thread,
+  };
+}
 
 export async function applyMailMessageAction(input: {
   ownerId: string;
   messageId: string;
   action: MailMessageAction;
-}): Promise<void> {
+}): Promise<MailMessageActionResult> {
   const db = createAdminClient();
   const { data: messageData, error: messageError } = await db
     .from("mail_messages")
@@ -1376,13 +1370,11 @@ export async function applyMailMessageAction(input: {
     });
   }
 
-  await updateLocalMessageFromGmail({
+  return updateLocalMessageAfterAction({
     ownerId: input.ownerId,
     accountId: account.id,
-    threadId: message.thread_id,
-    messageId: message.id,
-    accessToken,
-    providerMessageId: message.provider_message_id,
+    message,
+    action: input.action,
   });
 }
 
