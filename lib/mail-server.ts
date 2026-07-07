@@ -192,6 +192,29 @@ type GmailMessageList = {
   nextPageToken?: string;
 };
 
+type GmailHistoryMessageRef = {
+  id: string;
+  threadId?: string;
+};
+
+type GmailHistoryMessageChange = {
+  message?: GmailHistoryMessageRef;
+  labelIds?: string[];
+};
+
+type GmailHistoryRecord = {
+  messagesAdded?: GmailHistoryMessageChange[];
+  messagesDeleted?: GmailHistoryMessageChange[];
+  labelsAdded?: GmailHistoryMessageChange[];
+  labelsRemoved?: GmailHistoryMessageChange[];
+};
+
+type GmailHistoryList = {
+  history?: GmailHistoryRecord[];
+  nextPageToken?: string;
+  historyId?: string;
+};
+
 type GmailHeader = {
   name: string;
   value: string;
@@ -973,7 +996,7 @@ async function fetchGmailMessagesLimited(
           accessToken,
           messages[index].id,
         );
-        await wait(80);
+        await wait(15);
       }
     }),
   );
@@ -996,6 +1019,186 @@ async function listGmailMessagesPage(
     accessToken,
     `https://gmail.googleapis.com/gmail/v1/users/me/messages?${params.toString()}`,
   );
+}
+
+async function upsertParsedGmailMessages(input: {
+  ownerId: string;
+  accountId: string;
+  messages: ParsedGmailMessage[];
+}): Promise<void> {
+  const db = createAdminClient();
+  const sorted = [...input.messages].sort((a, b) => {
+    const aTime = a.receivedAt ? new Date(a.receivedAt).getTime() : 0;
+    const bTime = b.receivedAt ? new Date(b.receivedAt).getTime() : 0;
+    return aTime - bTime;
+  });
+
+  for (const message of sorted) {
+    const { data: threadRow, error: threadError } = await db
+      .from("mail_threads")
+      .upsert(
+        {
+          owner_id: input.ownerId,
+          account_id: input.accountId,
+          folder_id: message.folderId,
+          provider_thread_id: message.providerThreadId,
+          subject: message.subject,
+          participants: [message.from],
+          snippet: message.snippet,
+          last_message_at: message.receivedAt,
+          unread: message.unread,
+          starred: message.starred,
+          labels: message.labels,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "account_id,provider_thread_id" },
+      )
+      .select("id")
+      .single();
+    if (threadError) throw threadError;
+
+    const { error: messageError } = await db.from("mail_messages").upsert(
+      {
+        owner_id: input.ownerId,
+        account_id: input.accountId,
+        thread_id: (threadRow as { id: string }).id,
+        folder_id: message.folderId,
+        provider_message_id: message.providerMessageId,
+        from_email: message.from.email,
+        from_name: message.from.name,
+        to_recipients: message.to,
+        cc_recipients: message.cc,
+        bcc_recipients: message.bcc,
+        subject: message.subject,
+        snippet: message.snippet,
+        body_text: message.bodyText,
+        body_html: message.bodyHtml,
+        sent_at: message.sentAt,
+        received_at: message.receivedAt,
+        unread: message.unread,
+        starred: message.starred,
+        has_attachments: message.hasAttachments,
+        attachments: [],
+        labels: message.labels,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "account_id,provider_message_id" },
+    );
+    if (messageError) throw messageError;
+  }
+}
+
+async function listGmailHistoryPage(
+  accessToken: string,
+  input: {
+    startHistoryId: string;
+    pageToken?: string | null;
+  },
+): Promise<GmailHistoryList> {
+  const params = new URLSearchParams({
+    startHistoryId: input.startHistoryId,
+    maxResults: "100",
+  });
+  for (const type of [
+    "messageAdded",
+    "messageDeleted",
+    "labelAdded",
+    "labelRemoved",
+  ]) {
+    params.append("historyTypes", type);
+  }
+  if (input.pageToken) params.set("pageToken", input.pageToken);
+  return googleJson<GmailHistoryList>(
+    accessToken,
+    `https://gmail.googleapis.com/gmail/v1/users/me/history?${params.toString()}`,
+  );
+}
+
+async function collectGmailHistoryChanges(
+  accessToken: string,
+  startHistoryId: string,
+): Promise<{
+  changedIds: string[];
+  deletedIds: string[];
+  historyId: string | null;
+}> {
+  const changed = new Set<string>();
+  const deleted = new Set<string>();
+  let pageToken: string | null = null;
+  let historyId: string | null = null;
+
+  do {
+    const page = await listGmailHistoryPage(accessToken, {
+      startHistoryId,
+      pageToken,
+    });
+    historyId = page.historyId ?? historyId;
+    for (const item of page.history ?? []) {
+      for (const change of item.messagesAdded ?? []) {
+        if (change.message?.id) changed.add(change.message.id);
+      }
+      for (const change of item.labelsAdded ?? []) {
+        if (change.message?.id) changed.add(change.message.id);
+      }
+      for (const change of item.labelsRemoved ?? []) {
+        if (change.message?.id) changed.add(change.message.id);
+      }
+      for (const change of item.messagesDeleted ?? []) {
+        if (!change.message?.id) continue;
+        deleted.add(change.message.id);
+        changed.delete(change.message.id);
+      }
+    }
+    pageToken = page.nextPageToken ?? null;
+  } while (pageToken);
+
+  return {
+    changedIds: [...changed].filter((id) => !deleted.has(id)),
+    deletedIds: [...deleted],
+    historyId,
+  };
+}
+
+async function syncGmailHistory(input: {
+  ownerId: string;
+  accountId: string;
+  accessToken: string;
+  startHistoryId: string;
+  folderIdByProviderId: Map<string, string>;
+}): Promise<{
+  loadedCount: number;
+  historyId: string | null;
+}> {
+  const history = await collectGmailHistoryChanges(
+    input.accessToken,
+    input.startHistoryId,
+  );
+  if (history.deletedIds.length > 0) {
+    await removeLocalDeletedMessages({
+      ownerId: input.ownerId,
+      accountId: input.accountId,
+      providerMessageIds: history.deletedIds,
+    });
+  }
+  if (history.changedIds.length === 0) {
+    return { loadedCount: 0, historyId: history.historyId };
+  }
+
+  const detailed = await fetchGmailMessagesLimited(
+    input.accessToken,
+    history.changedIds.map((id) => ({ id })),
+  );
+  await upsertParsedGmailMessages({
+    ownerId: input.ownerId,
+    accountId: input.accountId,
+    messages: detailed.map((message) =>
+      parseGmailMessage(message, input.folderIdByProviderId),
+    ),
+  });
+  return {
+    loadedCount: detailed.length,
+    historyId: history.historyId,
+  };
 }
 
 export type GmailSyncResult = {
@@ -1032,6 +1235,7 @@ export async function syncGmailAccount(input: {
 
   let parsedCount = 0;
   let hasMore = false;
+  let nextHistoryId: string | null = null;
 
   try {
     const accessToken = await gmailAccessToken(account);
@@ -1040,97 +1244,73 @@ export async function syncGmailAccount(input: {
       accountId: account.id,
       accessToken,
     });
-    const listed = await listGmailMessagesPage(accessToken, {
-      providerFolderId,
-      pageToken,
-    });
-    const detailed = await fetchGmailMessagesLimited(
-      accessToken,
-      listed.messages ?? [],
-    );
-    const parsed = detailed
-      .map((message) => parseGmailMessage(message, folderIdByProviderId))
-      .sort((a, b) => {
-        const aTime = a.receivedAt ? new Date(a.receivedAt).getTime() : 0;
-        const bTime = b.receivedAt ? new Date(b.receivedAt).getTime() : 0;
-        return aTime - bTime;
+
+    const historyId =
+      typeof syncState.historyId === "string" ? syncState.historyId : null;
+    const canUseHistory = Boolean(historyId && !input.backfill && !providerFolderId);
+    let usedHistory = false;
+
+    if (canUseHistory && historyId) {
+      try {
+        const history = await syncGmailHistory({
+          ownerId: input.ownerId,
+          accountId: account.id,
+          accessToken,
+          startHistoryId: historyId,
+          folderIdByProviderId,
+        });
+        parsedCount = history.loadedCount;
+        nextHistoryId = history.historyId;
+        hasMore = hasMoreByLabel[cursorKey] ?? false;
+        usedHistory = true;
+      } catch {
+        usedHistory = false;
+      }
+    }
+
+    if (!usedHistory) {
+      const listed = await listGmailMessagesPage(accessToken, {
+        providerFolderId,
+        pageToken,
       });
-    parsedCount = parsed.length;
-    hasMore = Boolean(listed.nextPageToken);
-
-    const db = createAdminClient();
-    for (const message of parsed) {
-      const { data: threadRow, error: threadError } = await db
-        .from("mail_threads")
-        .upsert(
-          {
-            owner_id: input.ownerId,
-            account_id: account.id,
-            folder_id: message.folderId,
-            provider_thread_id: message.providerThreadId,
-            subject: message.subject,
-            participants: [message.from],
-            snippet: message.snippet,
-            last_message_at: message.receivedAt,
-            unread: message.unread,
-            starred: message.starred,
-            labels: message.labels,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "account_id,provider_thread_id" },
-        )
-        .select("id")
-        .single();
-      if (threadError) throw threadError;
-
-      const { error: messageError } = await db.from("mail_messages").upsert(
-        {
-          owner_id: input.ownerId,
-          account_id: account.id,
-          thread_id: (threadRow as { id: string }).id,
-          folder_id: message.folderId,
-          provider_message_id: message.providerMessageId,
-          from_email: message.from.email,
-          from_name: message.from.name,
-          to_recipients: message.to,
-          cc_recipients: message.cc,
-          bcc_recipients: message.bcc,
-          subject: message.subject,
-          snippet: message.snippet,
-          body_text: message.bodyText,
-          body_html: message.bodyHtml,
-          sent_at: message.sentAt,
-          received_at: message.receivedAt,
-          unread: message.unread,
-          starred: message.starred,
-          has_attachments: message.hasAttachments,
-          attachments: [],
-          labels: message.labels,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "account_id,provider_message_id" },
+      const detailed = await fetchGmailMessagesLimited(
+        accessToken,
+        listed.messages ?? [],
       );
-      if (messageError) throw messageError;
+      const parsed = detailed.map((message) =>
+        parseGmailMessage(message, folderIdByProviderId),
+      );
+      parsedCount = parsed.length;
+      hasMore = Boolean(listed.nextPageToken);
+      await upsertParsedGmailMessages({
+        ownerId: input.ownerId,
+        accountId: account.id,
+        messages: parsed,
+      });
+      const nextCursors = {
+        ...cursors,
+        [cursorKey]: listed.nextPageToken ?? null,
+      };
+      const nextHasMoreByLabel = {
+        ...hasMoreByLabel,
+        [cursorKey]: hasMore,
+      };
+      Object.assign(cursors, nextCursors);
+      Object.assign(hasMoreByLabel, nextHasMoreByLabel);
     }
 
     const profile = await fetchGmailProfile(accessToken);
-    const nextCursors = {
-      ...cursors,
-      [cursorKey]: listed.nextPageToken ?? null,
-    };
-    const nextHasMoreByLabel = {
-      ...hasMoreByLabel,
-      [cursorKey]: hasMore,
-    };
     await updateAccountStatus(account.id, input.ownerId, {
       status: "connected",
       error: null,
       last_synced_at: new Date().toISOString(),
       sync_state: {
         ...syncState,
-        ...(profile.historyId ? { historyId: profile.historyId } : {}),
-        gmailCursors: nextCursors,
-        gmailHasMoreByLabel: nextHasMoreByLabel,
+        ...(nextHistoryId || profile.historyId
+          ? { historyId: nextHistoryId ?? profile.historyId }
+          : {}),
+        gmailCursors: cursors,
+        gmailHasMoreByLabel: hasMoreByLabel,
         lastSyncProviderFolderId: providerFolderId,
         recentMessageCount: parsedCount,
       },
