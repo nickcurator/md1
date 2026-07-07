@@ -17,6 +17,7 @@ import {
   Plus,
   RefreshCw,
   Reply,
+  ReplyAll,
   Search,
   Send,
   Square,
@@ -488,7 +489,7 @@ type MailMessageDetailResponse = {
   error?: string;
 };
 
-type ComposeMode = "compose" | "reply" | "forward" | "draft";
+type ComposeMode = "compose" | "reply" | "reply_all" | "forward" | "draft";
 
 type ComposeAttachment = {
   id: string;
@@ -601,6 +602,32 @@ function latestMessage(messages: MailMessage[]): MailMessage | null {
 function recipientInput(recipient: MailRecipient): string {
   if (!recipient.name) return recipient.email;
   return `${recipient.name} <${recipient.email}>`;
+}
+
+function normalizedEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function uniqueExternalRecipients(
+  recipients: MailRecipient[],
+  excludedEmails: Set<string>,
+): MailRecipient[] {
+  const seen = new Set<string>();
+  const unique: MailRecipient[] = [];
+  for (const recipient of recipients) {
+    const email = normalizedEmail(recipient.email);
+    if (!email || excludedEmails.has(email) || seen.has(email)) continue;
+    seen.add(email);
+    unique.push({
+      email: recipient.email.trim(),
+      name: recipient.name.trim(),
+    });
+  }
+  return unique;
+}
+
+function composeRecipientList(recipients: MailRecipient[]): string {
+  return recipients.map(recipientInput).join(", ");
 }
 
 function replySubject(subject: string): string {
@@ -1090,6 +1117,24 @@ export default function MailClient({
   const messageBodyLoading =
     selectedMessage !== null && messageBodyIsLoading(selectedMessage);
   const selectedIsDraft = isDraftMessage(selectedMessage);
+  const selectedReplyAllExternalCount = useMemo(() => {
+    if (!selectedMessage) return 0;
+    const ownEmails = new Set(
+      mailWorkspace.accounts.map((account) => normalizedEmail(account.email)),
+    );
+    const fromEmail = normalizedEmail(selectedMessage.fromEmail);
+    const addresses = [
+      fromEmail,
+      ...selectedMessage.toRecipients.map((recipient) =>
+        normalizedEmail(recipient.email),
+      ),
+      ...selectedMessage.ccRecipients.map((recipient) =>
+        normalizedEmail(recipient.email),
+      ),
+    ];
+    return new Set(addresses.filter((email) => email && !ownEmails.has(email)))
+      .size;
+  }, [mailWorkspace.accounts, selectedMessage]);
   const selectedThreadActionMessageIds = useMemo(
     () =>
       selectedMessages
@@ -1297,6 +1342,48 @@ export default function MailClient({
         name: selectedMessage.fromName,
       }),
       cc: "",
+      bcc: "",
+      subject: replySubject(selectedMessage.subject),
+      bodyText: quotedMessageBody(selectedMessage),
+      replyToMessageId: selectedMessage.id,
+      draftMessageId: null,
+      attachments: [],
+    });
+  }
+
+  function openReplyAll() {
+    if (!selectedAccount || !selectedMessage) return;
+    const ownEmails = new Set(
+      mailWorkspace.accounts.map((account) => normalizedEmail(account.email)),
+    );
+    const fromRecipient: MailRecipient | null = selectedMessage.fromEmail
+      ? { email: selectedMessage.fromEmail, name: selectedMessage.fromName }
+      : null;
+    const fromIsSelf =
+      fromRecipient !== null && ownEmails.has(normalizedEmail(fromRecipient.email));
+    const toRecipients = uniqueExternalRecipients(
+      fromIsSelf
+        ? selectedMessage.toRecipients
+        : fromRecipient
+          ? [fromRecipient]
+          : selectedMessage.toRecipients,
+      ownEmails,
+    );
+    const toEmails = new Set(toRecipients.map((recipient) => normalizedEmail(recipient.email)));
+    const ccRecipients = uniqueExternalRecipients(
+      [
+        ...(fromIsSelf ? [] : selectedMessage.toRecipients),
+        ...selectedMessage.ccRecipients,
+      ],
+      new Set([...ownEmails, ...toEmails]),
+    );
+    if (toRecipients.length === 0 && ccRecipients.length === 0) return;
+    setShowCcBcc(ccRecipients.length > 0);
+    setCompose({
+      mode: "reply_all",
+      accountId: selectedAccount.id,
+      to: composeRecipientList(toRecipients),
+      cc: composeRecipientList(ccRecipients),
       bcc: "",
       subject: replySubject(selectedMessage.subject),
       bodyText: quotedMessageBody(selectedMessage),
@@ -1861,6 +1948,8 @@ export default function MailClient({
   const composeTitle =
     compose?.mode === "reply"
       ? "Reply"
+      : compose?.mode === "reply_all"
+        ? "Reply all"
       : compose?.mode === "forward"
         ? "Forward"
         : compose?.mode === "draft"
@@ -2552,6 +2641,19 @@ export default function MailClient({
                     className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
                   >
                     <Reply size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    title="Reply all"
+                    disabled={
+                      !!pendingAction ||
+                      messageBodyLoading ||
+                      selectedReplyAllExternalCount === 0
+                    }
+                    onClick={openReplyAll}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
+                  >
+                    <ReplyAll size={16} />
                   </button>
                   <button
                     type="button"
