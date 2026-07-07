@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getDriveUserFromRequest } from "@/lib/drive-auth-server";
 import {
   applyMailMessageAction,
+  listMailWorkspace,
   type MailMessageAction,
 } from "@/lib/mail-server";
 
@@ -52,7 +53,8 @@ export async function POST(
       messageId: id,
       action: body.action as MailMessageAction,
     });
-    return NextResponse.json({ ok: true });
+    const workspace = await listMailWorkspace(user.id);
+    return NextResponse.json({ workspace });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Action failed" },

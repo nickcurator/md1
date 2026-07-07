@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDriveUserFromRequest } from "@/lib/drive-auth-server";
-import { deleteMailAccount } from "@/lib/mail-server";
+import { deleteMailAccount, listMailWorkspace } from "@/lib/mail-server";
 
 export const dynamic = "force-dynamic";
 
@@ -19,5 +19,6 @@ export async function DELETE(
   if (!user) return notFound();
   const { id } = await params;
   await deleteMailAccount({ ownerId: user.id, accountId: id });
-  return NextResponse.json({ ok: true });
+  const workspace = await listMailWorkspace(user.id);
+  return NextResponse.json({ workspace });
 }

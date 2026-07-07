@@ -110,7 +110,7 @@ function messageRecipients(recipients: MailMessage["toRecipients"]): string {
 export default function MailClient({
   user,
   isAdmin = false,
-  workspace,
+  workspace: initialWorkspace,
   initialAccountId,
   oauthError,
 }: {
@@ -120,8 +120,10 @@ export default function MailClient({
   initialAccountId: string | null;
   oauthError: string | null;
 }) {
+  const [mailWorkspace, setMailWorkspace] =
+    useState<MailWorkspace>(initialWorkspace);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(
-    initialAccountId ?? workspace.accounts[0]?.id ?? null,
+    initialAccountId ?? initialWorkspace.accounts[0]?.id ?? null,
   );
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
@@ -131,25 +133,25 @@ export default function MailClient({
   const [uiError, setUiError] = useState<string | null>(oauthError);
 
   const selectedAccount =
-    workspace.accounts.find((account) => account.id === selectedAccountId) ??
-    workspace.accounts[0] ??
+    mailWorkspace.accounts.find((account) => account.id === selectedAccountId) ??
+    mailWorkspace.accounts[0] ??
     null;
 
   const accountThreadLabelCounts = useMemo(() => {
     const counts = new Map<string, number>();
     if (!selectedAccount) return counts;
-    for (const thread of workspace.threads) {
+    for (const thread of mailWorkspace.threads) {
       if (thread.accountId !== selectedAccount.id) continue;
       for (const label of thread.labels) {
         counts.set(label, (counts.get(label) ?? 0) + 1);
       }
     }
     return counts;
-  }, [selectedAccount, workspace.threads]);
+  }, [selectedAccount, mailWorkspace.threads]);
 
   const accountFolderGroups = useMemo(() => {
     const folders = selectedAccount
-      ? workspace.folders.filter((folder) => folder.accountId === selectedAccount.id)
+      ? mailWorkspace.folders.filter((folder) => folder.accountId === selectedAccount.id)
       : [];
     const visible = folders.filter((folder) => {
       if (HIDDEN_SYSTEM_LABELS.has(folder.providerFolderId)) return false;
@@ -171,7 +173,7 @@ export default function MailClient({
         )
         .sort((a, b) => folderDisplayName(a).localeCompare(folderDisplayName(b))),
     };
-  }, [accountThreadLabelCounts, selectedAccount, workspace.folders]);
+  }, [accountThreadLabelCounts, selectedAccount, mailWorkspace.folders]);
 
   const accountFolders = useMemo(
     () => [
@@ -201,6 +203,17 @@ export default function MailClient({
     }
   }, [accountFolders, defaultFolderId, selectedAccount, selectedFolderId]);
 
+  useEffect(() => {
+    if (
+      selectedAccountId !== null &&
+      !mailWorkspace.accounts.some((account) => account.id === selectedAccountId)
+    ) {
+      setSelectedAccountId(mailWorkspace.accounts[0]?.id ?? null);
+      setSelectedFolderId(null);
+      setSelectedThreadId(null);
+    }
+  }, [mailWorkspace.accounts, selectedAccountId]);
+
   const activeFolderId = selectedFolderId ?? defaultFolderId;
   const activeFolder =
     accountFolders.find((folder) => folder.id === activeFolderId) ?? null;
@@ -208,7 +221,7 @@ export default function MailClient({
 
   const visibleThreads = useMemo(() => {
     if (!selectedAccount) return [];
-    return workspace.threads.filter((thread) => {
+    return mailWorkspace.threads.filter((thread) => {
       if (thread.accountId !== selectedAccount.id) return false;
       if (
         activeFolder?.providerFolderId !== "TRASH" &&
@@ -232,7 +245,7 @@ export default function MailClient({
         .toLowerCase();
       return haystack.includes(normalizedQuery);
     });
-  }, [activeFolder, normalizedQuery, selectedAccount, workspace.threads]);
+  }, [activeFolder, normalizedQuery, selectedAccount, mailWorkspace.threads]);
 
   useEffect(() => {
     if (!visibleThreads.length) {
@@ -249,7 +262,7 @@ export default function MailClient({
     visibleThreads[0] ??
     null;
   const selectedMessages = selectedThread
-    ? workspace.messages
+    ? mailWorkspace.messages
         .filter((message) => message.threadId === selectedThread.id)
         .sort((a, b) => {
           const aTime = a.receivedAt ? new Date(a.receivedAt).getTime() : 0;
@@ -268,9 +281,12 @@ export default function MailClient({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ accountId }),
       });
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      const data = (await res.json().catch(() => ({}))) as {
+        workspace?: MailWorkspace;
+        error?: string;
+      };
       if (!res.ok) throw new Error(data.error || `Sync failed (${res.status})`);
-      window.location.reload();
+      if (data.workspace) setMailWorkspace(data.workspace);
     } catch (err) {
       setUiError(err instanceof Error ? err.message : "Sync failed");
     } finally {
@@ -286,10 +302,18 @@ export default function MailClient({
       const res = await fetch(`/api/mail/accounts/${accountId}`, {
         method: "DELETE",
       });
-      if (!res.ok) throw new Error(`Remove failed (${res.status})`);
-      window.location.href = "/mail";
+      const data = (await res.json().catch(() => ({}))) as {
+        workspace?: MailWorkspace;
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error || `Remove failed (${res.status})`);
+      if (data.workspace) setMailWorkspace(data.workspace);
+      setSelectedAccountId(data.workspace?.accounts[0]?.id ?? null);
+      setSelectedFolderId(null);
+      setSelectedThreadId(null);
     } catch (err) {
       setUiError(err instanceof Error ? err.message : "Remove failed");
+    } finally {
       setPendingAction(null);
     }
   }
@@ -308,6 +332,7 @@ export default function MailClient({
       const data = (await res.json().catch(() => ({}))) as {
         deletedCount?: number;
         hasMore?: boolean;
+        workspace?: MailWorkspace;
         error?: string;
       };
       if (!res.ok) {
@@ -318,9 +343,10 @@ export default function MailClient({
           `Deleted ${data.deletedCount ?? 0} messages. Trash still has more messages; run Empty Trash again.`,
         );
       }
-      window.location.reload();
+      if (data.workspace) setMailWorkspace(data.workspace);
     } catch (err) {
       setUiError(err instanceof Error ? err.message : "Empty Trash failed");
+    } finally {
       setPendingAction(null);
     }
   }
@@ -335,11 +361,15 @@ export default function MailClient({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action }),
       });
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      const data = (await res.json().catch(() => ({}))) as {
+        workspace?: MailWorkspace;
+        error?: string;
+      };
       if (!res.ok) throw new Error(data.error || `Action failed (${res.status})`);
-      window.location.reload();
+      if (data.workspace) setMailWorkspace(data.workspace);
     } catch (err) {
       setUiError(err instanceof Error ? err.message : "Action failed");
+    } finally {
       setPendingAction(null);
     }
   }
@@ -410,7 +440,7 @@ export default function MailClient({
             </a>
           </div>
           <div className="space-y-0.5">
-            {workspace.accounts.length === 0 ? (
+            {mailWorkspace.accounts.length === 0 ? (
               <a
                 href="/api/mail/google/start"
                 className="flex items-center gap-2 rounded-md px-2 py-2 text-sm text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)]"
@@ -419,7 +449,7 @@ export default function MailClient({
                 <span className="min-w-0 flex-1 truncate">Connect Gmail</span>
               </a>
             ) : (
-              workspace.accounts.map((account) => {
+              mailWorkspace.accounts.map((account) => {
                 const selected = selectedAccount?.id === account.id;
                 const busy = syncingAccountId === account.id;
                 return (
@@ -578,9 +608,9 @@ export default function MailClient({
               {uiError}
             </div>
           )}
-          {workspace.setupError && (
+          {mailWorkspace.setupError && (
             <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
-              {workspace.setupError}
+              {mailWorkspace.setupError}
             </div>
           )}
         </div>

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDriveUserFromRequest } from "@/lib/drive-auth-server";
-import { emptyGmailTrash } from "@/lib/mail-server";
+import { emptyGmailTrash, listMailWorkspace } from "@/lib/mail-server";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +21,8 @@ export async function POST(
 
   try {
     const result = await emptyGmailTrash({ ownerId: user.id, accountId: id });
-    return NextResponse.json(result);
+    const workspace = await listMailWorkspace(user.id);
+    return NextResponse.json({ ...result, workspace });
   } catch (err) {
     return NextResponse.json(
       {
