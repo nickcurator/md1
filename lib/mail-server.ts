@@ -8,6 +8,7 @@ import { cleanMailText } from "@/lib/mail-text";
 import type {
   MailAccount,
   MailAccountStatus,
+  MailAttachment,
   MailFolder,
   MailFolderKind,
   MailMessage,
@@ -260,6 +261,7 @@ type ParsedGmailMessage = {
   unread: boolean;
   starred: boolean;
   hasAttachments: boolean;
+  attachments: MailAttachment[];
   labels: string[];
 };
 
@@ -267,6 +269,11 @@ type GmailSendResponse = {
   id: string;
   threadId: string;
   labelIds?: string[];
+};
+
+type GmailAttachmentResponse = {
+  data?: string;
+  size?: number;
 };
 
 function jsonObject(raw: unknown): Record<string, unknown> {
@@ -324,6 +331,38 @@ function recordArray(raw: unknown): Record<string, unknown>[] {
     (item): item is Record<string, unknown> =>
       !!item && typeof item === "object" && !Array.isArray(item),
   );
+}
+
+function mailAttachments(raw: unknown): MailAttachment[] {
+  return recordArray(raw)
+    .map((item) => {
+      const filename = typeof item.filename === "string" ? item.filename : "";
+      if (!filename.trim()) return null;
+      return {
+        id:
+          typeof item.id === "string" && item.id
+            ? item.id
+            : typeof item.providerAttachmentId === "string" &&
+                item.providerAttachmentId
+              ? item.providerAttachmentId
+              : filename,
+        providerAttachmentId:
+          typeof item.providerAttachmentId === "string" &&
+          item.providerAttachmentId
+            ? item.providerAttachmentId
+            : null,
+        partId:
+          typeof item.partId === "string" && item.partId ? item.partId : null,
+        filename,
+        mimeType:
+          typeof item.mimeType === "string" && item.mimeType
+            ? item.mimeType
+            : "application/octet-stream",
+        size: typeof item.size === "number" ? item.size : null,
+        inline: item.inline === true,
+      };
+    })
+    .filter((item): item is MailAttachment => item !== null);
 }
 
 function mapAccount(row: MailAccountRow): MailAccount {
@@ -401,7 +440,7 @@ function mapMessage(row: MailMessageRow): MailMessage {
     unread: row.unread,
     starred: row.starred,
     hasAttachments: row.has_attachments,
-    attachments: recordArray(row.attachments),
+    attachments: mailAttachments(row.attachments),
     labels: stringArray(row.labels),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -836,6 +875,11 @@ function decodeGmailData(data: string | undefined): string {
   return Buffer.from(data, "base64url").toString("utf8");
 }
 
+function decodeGmailBytes(data: string | undefined): Buffer {
+  if (!data) return Buffer.alloc(0);
+  return Buffer.from(data, "base64url");
+}
+
 function walkParts(part: GmailMessagePart | undefined): GmailMessagePart[] {
   if (!part) return [];
   return [part, ...(part.parts ?? []).flatMap(walkParts)];
@@ -954,6 +998,28 @@ function primaryFolderId(
   return null;
 }
 
+function parseGmailAttachments(parts: GmailMessagePart[]): MailAttachment[] {
+  return parts
+    .map((part, index) => {
+      const filename = part.filename?.trim() ?? "";
+      if (!filename) return null;
+      const disposition = header(part.headers, "Content-Disposition")
+        .toLowerCase()
+        .trim();
+      const providerAttachmentId = part.body?.attachmentId ?? null;
+      return {
+        id: providerAttachmentId ?? part.partId ?? `${filename}-${index}`,
+        providerAttachmentId,
+        partId: part.partId ?? null,
+        filename,
+        mimeType: part.mimeType || "application/octet-stream",
+        size: typeof part.body?.size === "number" ? part.body.size : null,
+        inline: disposition.includes("inline"),
+      };
+    })
+    .filter((item): item is MailAttachment => item !== null);
+}
+
 function parseGmailMessage(
   message: GmailMessage,
   folderIdByProviderId: Map<string, string>,
@@ -991,6 +1057,7 @@ function parseGmailMessage(
   const htmlPart = parts.find((p) => p.mimeType === "text/html");
   const bodyText = cleanMailText(decodeGmailData(textPart?.body?.data));
   const bodyHtml = decodeGmailData(htmlPart?.body?.data).trim();
+  const attachments = parseGmailAttachments(parts);
 
   return {
     providerMessageId: message.id,
@@ -1008,7 +1075,8 @@ function parseGmailMessage(
     receivedAt,
     unread: labels.includes("UNREAD"),
     starred: labels.includes("STARRED"),
-    hasAttachments: parts.some((p) => !!p.filename),
+    hasAttachments: attachments.length > 0,
+    attachments,
     labels,
   };
 }
@@ -1165,7 +1233,7 @@ async function upsertParsedGmailMessages(input: {
         unread: message.unread,
         starred: message.starred,
         has_attachments: message.hasAttachments,
-        attachments: [],
+        attachments: message.attachments,
         labels: message.labels,
         updated_at: new Date().toISOString(),
       },
@@ -1700,6 +1768,64 @@ export async function sendGmailMessage(input: {
     workspace: await listMailWorkspace(input.ownerId),
     message: sentLocal.message,
     thread: sentLocal.thread,
+  };
+}
+
+export type MailAttachmentDownload = {
+  filename: string;
+  mimeType: string;
+  size: number | null;
+  bytes: Buffer;
+};
+
+export async function downloadMailAttachment(input: {
+  ownerId: string;
+  messageId: string;
+  attachmentId: string;
+}): Promise<MailAttachmentDownload> {
+  const db = createAdminClient();
+  const { data: messageData, error: messageError } = await db
+    .from("mail_messages")
+    .select("*")
+    .eq("id", input.messageId)
+    .eq("owner_id", input.ownerId)
+    .maybeSingle();
+  if (messageError) throw messageError;
+  if (!messageData) throw new Error("Message not found");
+
+  const message = messageData as MailMessageRow;
+  const attachment = mailAttachments(message.attachments).find(
+    (item) =>
+      item.id === input.attachmentId ||
+      item.providerAttachmentId === input.attachmentId,
+  );
+  if (!attachment) throw new Error("Attachment not found");
+  if (!attachment.providerAttachmentId) {
+    throw new Error("Attachment is not downloadable");
+  }
+
+  const account = await getPrivateAccount(input.ownerId, message.account_id);
+  if (!account || account.provider !== "gmail") {
+    throw new Error("Mail account not found");
+  }
+  const accessToken = await gmailAccessToken(account);
+  const gmailAttachment = await googleJson<GmailAttachmentResponse>(
+    accessToken,
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(
+      message.provider_message_id,
+    )}/attachments/${encodeURIComponent(attachment.providerAttachmentId)}`,
+  );
+  const bytes = decodeGmailBytes(gmailAttachment.data);
+  if (bytes.length === 0) throw new Error("Attachment is empty");
+
+  return {
+    filename: attachment.filename,
+    mimeType: attachment.mimeType,
+    size:
+      typeof gmailAttachment.size === "number"
+        ? gmailAttachment.size
+        : attachment.size,
+    bytes,
   };
 }
 

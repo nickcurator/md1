@@ -29,6 +29,16 @@ export type MailRecipient = {
   name: string;
 };
 
+export type MailAttachment = {
+  id: string;
+  providerAttachmentId: string | null;
+  partId: string | null;
+  filename: string;
+  mimeType: string;
+  size: number | null;
+  inline: boolean;
+};
+
 export type MailAccount = {
   id: string;
   ownerId: string;
@@ -97,7 +107,7 @@ export type MailMessage = {
   unread: boolean;
   starred: boolean;
   hasAttachments: boolean;
-  attachments: Record<string, unknown>[];
+  attachments: MailAttachment[];
   labels: string[];
   createdAt: string;
   updatedAt: string;

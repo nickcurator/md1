@@ -5,11 +5,13 @@ import Link from "next/link";
 import {
   Archive,
   Check,
+  Download,
   FileText,
   Forward,
   Inbox,
   Loader2,
   Mail,
+  Paperclip,
   PencilLine,
   Plus,
   RefreshCw,
@@ -28,6 +30,7 @@ import {
   formatRecipient,
   providerLabel,
   type MailAccount,
+  type MailAttachment,
   type MailFolder,
   type MailFolderKind,
   type MailMessageAction,
@@ -113,6 +116,29 @@ function messageSender(message: MailMessage): string {
 
 function messageRecipients(recipients: MailMessage["toRecipients"]): string {
   return recipients.map(formatRecipient).join(", ");
+}
+
+function attachmentLabel(attachment: MailAttachment): string {
+  const size = attachment.size;
+  if (typeof size !== "number" || !Number.isFinite(size) || size <= 0) {
+    return attachment.mimeType;
+  }
+  if (size < 1024) return `${attachment.mimeType} · ${size} B`;
+  const kb = size / 1024;
+  if (kb < 1024) return `${attachment.mimeType} · ${kb.toFixed(kb >= 100 ? 0 : 1)} KB`;
+  const mb = kb / 1024;
+  return `${attachment.mimeType} · ${mb.toFixed(mb >= 100 ? 0 : 1)} MB`;
+}
+
+function attachmentDownloadHref(
+  message: MailMessage,
+  attachment: MailAttachment,
+): string | null {
+  const id = attachment.providerAttachmentId || attachment.id;
+  if (!attachment.providerAttachmentId || !id) return null;
+  return `/api/mail/messages/${encodeURIComponent(
+    message.id,
+  )}/attachments/${encodeURIComponent(id)}`;
 }
 
 function gmailSyncCursorKey(folder: MailFolder | null): string {
@@ -1571,6 +1597,60 @@ export default function MailClient({
               <div className="py-6 text-[15px] leading-7">
                 {renderMailBody(selectedMessage.bodyText || selectedMessage.snippet)}
               </div>
+              {selectedMessage.attachments.length > 0 && (
+                <section className="border-t border-[var(--border)] pt-4">
+                  <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+                    <Paperclip size={15} className="text-[var(--muted)]" />
+                    <span>
+                      {selectedMessage.attachments.length} attachment
+                      {selectedMessage.attachments.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {selectedMessage.attachments.map((attachment) => {
+                      const href = attachmentDownloadHref(
+                        selectedMessage,
+                        attachment,
+                      );
+                      const content = (
+                        <>
+                          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[var(--border)] text-[var(--muted)]">
+                            <Paperclip size={16} />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium">
+                              {attachment.filename}
+                            </span>
+                            <span className="block truncate text-xs text-[var(--muted)]">
+                              {attachmentLabel(attachment)}
+                            </span>
+                          </span>
+                          <Download
+                            size={15}
+                            className="shrink-0 text-[var(--muted)]"
+                          />
+                        </>
+                      );
+                      return href ? (
+                        <a
+                          key={attachment.id}
+                          href={href}
+                          className="flex min-w-0 items-center gap-2 rounded-md border border-[var(--border)] p-2 hover:bg-[var(--card)]"
+                        >
+                          {content}
+                        </a>
+                      ) : (
+                        <div
+                          key={attachment.id}
+                          className="flex min-w-0 items-center gap-2 rounded-md border border-[var(--border)] p-2 opacity-70"
+                        >
+                          {content}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
             </article>
           )}
         </div>
