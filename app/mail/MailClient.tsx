@@ -55,6 +55,17 @@ function formatDate(iso: string | null): string {
     : { month: "short", day: "numeric" }).format(date);
 }
 
+function plural(value: number, singular: string, pluralWord = `${singular}s`): string {
+  return `${value} ${value === 1 ? singular : pluralWord}`;
+}
+
+function compactCount(value: number): string {
+  return new Intl.NumberFormat(undefined, {
+    notation: value >= 10_000 ? "compact" : "standard",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
 function folderIcon(kind: MailFolderKind, size = 16) {
   if (kind === "inbox") return <Inbox size={size} />;
   if (kind === "sent") return <Send size={size} />;
@@ -1606,11 +1617,36 @@ export default function MailClient({
         : compose?.mode === "draft"
           ? "Draft"
           : "New message";
+  const activeFolderSummary =
+    selectedAccount && activeFolder
+      ? normalizedQuery
+        ? `${plural(visibleThreads.length, "loaded thread")} match`
+        : [
+            `${plural(visibleThreads.length, "loaded thread")}`,
+            activeFolder.unreadCount > 0
+              ? `${compactCount(activeFolder.unreadCount)} unread`
+              : null,
+            activeFolder.totalCount > 0
+              ? `${compactCount(activeFolder.totalCount)} Gmail message${
+                  activeFolder.totalCount === 1 ? "" : "s"
+                }`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")
+      : null;
 
   function renderFolderButton(folder: MailFolder) {
     const selected = activeFolderId === folder.id;
     const unreadCount = folder.unreadCount;
     const totalCount = folder.totalCount;
+    const loadedCount = accountThreadLabelCounts.get(folder.providerFolderId) ?? 0;
+    const loadedTitle =
+      loadedCount > 0
+        ? `${plural(loadedCount, "thread")} loaded in md1`
+        : totalCount > 0
+          ? `${plural(totalCount, "message")} reported by Gmail`
+          : "";
     return (
       <button
         key={folder.id}
@@ -1626,21 +1662,35 @@ export default function MailClient({
         <span className="min-w-0 flex-1 truncate">
           {folderDisplayName(folder)}
         </span>
-        {unreadCount > 0 ? (
-          <span
-            title={`${unreadCount} unread in Gmail`}
-            className="rounded-full bg-[var(--fg)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--bg)]"
-          >
-            {unreadCount}
-          </span>
-        ) : totalCount > 0 ? (
-          <span
-            title={`${totalCount} total in Gmail`}
-            className="text-xs tabular-nums text-[var(--muted)]"
-          >
-            {totalCount}
-          </span>
-        ) : null}
+        <span className="flex shrink-0 items-center gap-1">
+          {unreadCount > 0 && (
+            <span
+              title={`${unreadCount} unread reported by Gmail`}
+              className="rounded-full bg-[var(--fg)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--bg)]"
+            >
+              {compactCount(unreadCount)} unread
+            </span>
+          )}
+          {loadedCount > 0 ? (
+            <span
+              title={`${loadedTitle}${
+                totalCount > 0
+                  ? ` · ${plural(totalCount, "message")} reported by Gmail`
+                  : ""
+              }`}
+              className="text-xs tabular-nums text-[var(--muted)]"
+            >
+              {compactCount(loadedCount)}
+            </span>
+          ) : totalCount > 0 ? (
+            <span
+              title={loadedTitle}
+              className="text-[10px] tabular-nums text-[var(--muted)]"
+            >
+              Gmail {compactCount(totalCount)}
+            </span>
+          ) : null}
+        </span>
       </button>
     );
   }
@@ -1798,11 +1848,9 @@ export default function MailClient({
                   <p className="truncate text-xs text-[var(--muted)]">
                     {selectedAccount.email}
                   </p>
-                  {activeFolder && (
+                  {activeFolderSummary && (
                     <p className="truncate text-[11px] text-[var(--muted)]">
-                      {normalizedQuery
-                        ? `${visibleThreads.length} loaded thread${visibleThreads.length === 1 ? "" : "s"} match`
-                        : `Gmail total ${activeFolder.totalCount} · ${visibleThreads.length} synced thread${visibleThreads.length === 1 ? "" : "s"} shown`}
+                      {activeFolderSummary}
                     </p>
                   )}
                 </>
