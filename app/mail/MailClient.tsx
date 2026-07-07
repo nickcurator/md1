@@ -685,6 +685,34 @@ function applyOptimisticMessageAction(
   const target = workspace.messages.find((message) => message.id === messageId);
   if (!target) return workspace;
 
+  if (action === "delete_forever") {
+    const now = new Date().toISOString();
+    const messages = workspace.messages.filter((message) => message.id !== messageId);
+    const threadMessages = target.threadId
+      ? messages.filter((message) => message.threadId === target.threadId)
+      : [];
+    const latest = latestMessage(threadMessages);
+    const threads =
+      target.threadId && threadMessages.length === 0
+        ? workspace.threads.filter((thread) => thread.id !== target.threadId)
+        : workspace.threads.map((thread) => {
+            if (thread.id !== target.threadId || !latest) return thread;
+            return {
+              ...thread,
+              folderId: latest.folderId,
+              labels: [
+                ...new Set(
+                  threadMessages.flatMap((message) => message.labels),
+                ),
+              ],
+              unread: threadMessages.some((message) => message.unread),
+              starred: threadMessages.some((message) => message.starred),
+              updatedAt: now,
+            };
+          });
+    return { ...workspace, messages, threads };
+  }
+
   const next = applyMailActionToLabels(target.labels, action);
   const now = new Date().toISOString();
   const messages = workspace.messages.map((message) => {
@@ -1044,6 +1072,25 @@ export default function MailClient({
         .map((message) => message.id),
     [selectedMessages],
   );
+  const selectedThreadTrashMessageIds = useMemo(
+    () =>
+      selectedMessages
+        .filter(
+          (message) =>
+            !message.labels.includes("DRAFT") && message.labels.includes("TRASH"),
+        )
+        .map((message) => message.id),
+    [selectedMessages],
+  );
+  const selectedThreadDeleteForever =
+    activeFolder?.providerFolderId === "TRASH" &&
+    selectedThreadTrashMessageIds.length > 0;
+  const selectedThreadDeleteAction: MailMessageAction = selectedThreadDeleteForever
+    ? "delete_forever"
+    : "trash";
+  const selectedThreadDeleteMessageIds = selectedThreadDeleteForever
+    ? selectedThreadTrashMessageIds
+    : selectedThreadActionMessageIds;
   const selectedThreadUnread =
     selectedThreadActionMessageIds.length > 0 &&
     selectedMessages.some(
@@ -1076,6 +1123,24 @@ export default function MailClient({
       ),
     ];
   }, [mailWorkspace.messages, selectedAccount, selectedThreadIds]);
+  const selectedBulkTrashMessageIds = useMemo(() => {
+    if (selectedBulkMessageIds.length === 0) return [];
+    const selectedIds = new Set(selectedBulkMessageIds);
+    return mailWorkspace.messages
+      .filter(
+        (message) => selectedIds.has(message.id) && message.labels.includes("TRASH"),
+      )
+      .map((message) => message.id);
+  }, [mailWorkspace.messages, selectedBulkMessageIds]);
+  const selectedBulkDeleteForever =
+    activeFolder?.providerFolderId === "TRASH" &&
+    selectedBulkTrashMessageIds.length > 0;
+  const selectedBulkDeleteAction: MailMessageAction = selectedBulkDeleteForever
+    ? "delete_forever"
+    : "trash";
+  const selectedBulkDeleteMessageIds = selectedBulkDeleteForever
+    ? selectedBulkTrashMessageIds
+    : selectedBulkMessageIds;
   const allVisibleThreadsSelected =
     visibleThreads.length > 0 &&
     visibleThreads.every((thread) => selectedThreadIds.has(thread.id));
@@ -1610,20 +1675,20 @@ export default function MailClient({
         return;
       }
 
-      if (selectedThreadActionMessageIds.length === 0) return;
+      const actionMessageIds =
+        action === "delete_forever"
+          ? selectedThreadTrashMessageIds
+          : selectedThreadActionMessageIds;
+      if (actionMessageIds.length === 0) return;
       setMailWorkspace((current) =>
-        applyOptimisticMessageActions(
-          current,
-          selectedThreadActionMessageIds,
-          action,
-        ),
+        applyOptimisticMessageActions(current, actionMessageIds, action),
       );
       const res = await fetch("/api/mail/messages/bulk-action", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           action,
-          messageIds: selectedThreadActionMessageIds,
+          messageIds: actionMessageIds,
         }),
       });
       const data = (await res.json().catch(() => ({}))) as MailBulkActionResponse;
@@ -1633,11 +1698,17 @@ export default function MailClient({
           mergeWorkspacePreservingMessageBodies(data.workspace!, current),
         );
       }
+      if (action === "delete_forever") {
+        setUiNotice(
+          `Deleted ${data.affectedCount ?? actionMessageIds.length} message${
+            (data.affectedCount ?? actionMessageIds.length) === 1 ? "" : "s"
+          } forever.`,
+        );
+        return;
+      }
       setUiNotice(
-        `Updated ${data.affectedCount ?? selectedThreadActionMessageIds.length} message${
-          (data.affectedCount ?? selectedThreadActionMessageIds.length) === 1
-            ? ""
-            : "s"
+        `Updated ${data.affectedCount ?? actionMessageIds.length} message${
+          (data.affectedCount ?? actionMessageIds.length) === 1 ? "" : "s"
         }.`,
       );
     } catch (err) {
@@ -1649,7 +1720,11 @@ export default function MailClient({
   }
 
   async function runBulkAction(action: MailMessageAction) {
-    if (selectedBulkMessageIds.length === 0) return;
+    const actionMessageIds =
+      action === "delete_forever"
+        ? selectedBulkTrashMessageIds
+        : selectedBulkMessageIds;
+    if (actionMessageIds.length === 0) return;
     const key = `bulk:${action}`;
     setPendingAction(key);
     setUiError(null);
@@ -1660,7 +1735,7 @@ export default function MailClient({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           action,
-          messageIds: selectedBulkMessageIds,
+          messageIds: actionMessageIds,
         }),
       });
       const data = (await res.json().catch(() => ({}))) as MailBulkActionResponse;
@@ -1673,9 +1748,17 @@ export default function MailClient({
         );
       }
       setSelectedThreadIds(new Set());
+      if (action === "delete_forever") {
+        setUiNotice(
+          `Deleted ${data.affectedCount ?? actionMessageIds.length} message${
+            (data.affectedCount ?? actionMessageIds.length) === 1 ? "" : "s"
+          } forever.`,
+        );
+        return;
+      }
       setUiNotice(
-        `Updated ${data.affectedCount ?? selectedBulkMessageIds.length} message${
-          (data.affectedCount ?? selectedBulkMessageIds.length) === 1 ? "" : "s"
+        `Updated ${data.affectedCount ?? actionMessageIds.length} message${
+          (data.affectedCount ?? actionMessageIds.length) === 1 ? "" : "s"
         }.`,
       );
     } catch (err) {
@@ -2180,8 +2263,16 @@ export default function MailClient({
                     </button>
                     <button
                       type="button"
-                      title="Archive"
-                      disabled={bulkBusy || selectedBulkMessageIds.length === 0}
+                      title={
+                        activeFolder?.providerFolderId === "TRASH"
+                          ? "Move out of Trash first"
+                          : "Archive"
+                      }
+                      disabled={
+                        bulkBusy ||
+                        selectedBulkMessageIds.length === 0 ||
+                        activeFolder?.providerFolderId === "TRASH"
+                      }
                       onClick={() => void runBulkAction("archive")}
                       className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--bg)] hover:text-[var(--fg)] disabled:opacity-50"
                     >
@@ -2206,12 +2297,17 @@ export default function MailClient({
                     </button>
                     <button
                       type="button"
-                      title="Trash"
-                      disabled={bulkBusy || selectedBulkMessageIds.length === 0}
-                      onClick={() => void runBulkAction("trash")}
+                      title={
+                        selectedBulkDeleteForever ? "Delete forever" : "Trash"
+                      }
+                      disabled={
+                        bulkBusy ||
+                        selectedBulkDeleteMessageIds.length === 0
+                      }
+                      onClick={() => void runBulkAction(selectedBulkDeleteAction)}
                       className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--bg)] hover:text-red-500 disabled:opacity-50"
                     >
-                      {pendingAction === "bulk:trash" ? (
+                      {pendingAction === `bulk:${selectedBulkDeleteAction}` ? (
                         <Loader2 size={14} className="animate-spin" />
                       ) : (
                         <Trash2 size={14} />
@@ -2436,9 +2532,15 @@ export default function MailClient({
                   </button>
                   <button
                     type="button"
-                    title="Archive thread"
+                    title={
+                      activeFolder?.providerFolderId === "TRASH"
+                        ? "Move out of Trash first"
+                        : "Archive thread"
+                    }
                     disabled={
-                      !!pendingAction || selectedThreadActionMessageIds.length === 0
+                      !!pendingAction ||
+                      selectedThreadActionMessageIds.length === 0 ||
+                      activeFolder?.providerFolderId === "TRASH"
                     }
                     onClick={() => void runMessageAction("archive")}
                     className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
@@ -2471,14 +2573,20 @@ export default function MailClient({
               )}
               <button
                 type="button"
-                title={selectedIsDraft ? "Discard draft" : "Trash"}
+                title={
+                  selectedIsDraft
+                    ? "Discard draft"
+                    : selectedThreadDeleteForever
+                      ? "Delete forever"
+                      : "Trash"
+                }
                 disabled={
                   !!pendingAction ||
-                  (!selectedIsDraft && selectedThreadActionMessageIds.length === 0)
+                  (!selectedIsDraft && selectedThreadDeleteMessageIds.length === 0)
                 }
                 onClick={() =>
                   void runMessageAction(
-                    selectedIsDraft ? "delete_draft" : "trash",
+                    selectedIsDraft ? "delete_draft" : selectedThreadDeleteAction,
                   )
                 }
                 className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-red-500 disabled:opacity-50"

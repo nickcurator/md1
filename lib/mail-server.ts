@@ -3061,6 +3061,29 @@ export async function applyMailMessageAction(input: {
   }
   const accessToken = await gmailAccessToken(account);
 
+  if (input.action === "delete_forever") {
+    if (!hasFullGmailScope(account)) {
+      throw new Error(
+        "Reconnect this Gmail account to grant permanent delete access.",
+      );
+    }
+    if (!stringArray(message.labels).includes("TRASH")) {
+      throw new Error("Only messages in Trash can be permanently deleted.");
+    }
+    await deleteGmailMessagesInBatches(accessToken, [message.provider_message_id]);
+    await removeLocalDeletedMessages({
+      ownerId: input.ownerId,
+      accountId: account.id,
+      providerMessageIds: [message.provider_message_id],
+    });
+    await syncGmailFolders({
+      ownerId: input.ownerId,
+      accountId: account.id,
+      accessToken,
+    });
+    return { workspace: await listMailWorkspace(input.ownerId) };
+  }
+
   if (input.action === "mark_read") {
     await gmailModify(accessToken, message.provider_message_id, {
       removeLabelIds: ["UNREAD"],
@@ -3131,9 +3154,16 @@ export async function applyBulkMailMessageAction(input: {
   if (messageError) throw messageError;
   const messages = (messageData as MailMessageRow[]).filter((message) => {
     const labels = stringArray(message.labels);
+    if (input.action === "delete_forever") return labels.includes("TRASH");
     return !labels.includes("DRAFT");
   });
-  if (messages.length === 0) throw new Error("No actionable messages selected");
+  if (messages.length === 0) {
+    throw new Error(
+      input.action === "delete_forever"
+        ? "No Trash messages selected"
+        : "No actionable messages selected",
+    );
+  }
 
   const messagesByAccount = new Map<string, MailMessageRow[]>();
   for (const message of messages) {
@@ -3152,7 +3182,19 @@ export async function applyBulkMailMessageAction(input: {
       (message) => message.provider_message_id,
     );
 
-    if (input.action === "trash") {
+    if (input.action === "delete_forever") {
+      if (!hasFullGmailScope(account)) {
+        throw new Error(
+          "Reconnect this Gmail account to grant permanent delete access.",
+        );
+      }
+      await deleteGmailMessagesInBatches(accessToken, providerMessageIds);
+      await removeLocalDeletedMessages({
+        ownerId: input.ownerId,
+        accountId,
+        providerMessageIds,
+      });
+    } else if (input.action === "trash") {
       await gmailTrashMessagesLimited(accessToken, providerMessageIds);
     } else {
       const body = gmailBatchModifyBodyForAction(input.action);
@@ -3160,12 +3202,14 @@ export async function applyBulkMailMessageAction(input: {
       await gmailBatchModifyMessages(accessToken, providerMessageIds, body);
     }
 
-    await updateLocalMessagesAfterBulkAction({
-      ownerId: input.ownerId,
-      accountId,
-      messages: accountMessages,
-      action: input.action,
-    });
+    if (input.action !== "delete_forever") {
+      await updateLocalMessagesAfterBulkAction({
+        ownerId: input.ownerId,
+        accountId,
+        messages: accountMessages,
+        action: input.action,
+      });
+    }
     await syncGmailFolders({
       ownerId: input.ownerId,
       accountId,

@@ -21,6 +21,7 @@ export type MailMessageAction =
   | "mark_unread"
   | "archive"
   | "trash"
+  | "delete_forever"
   | "delete_draft"
   | "star"
   | "unstar";
@@ -178,6 +179,8 @@ export function applyMailActionToLabels(
   } else if (action === "trash") {
     nextLabels.delete("INBOX");
     nextLabels.add("TRASH");
+  } else if (action === "delete_forever") {
+    nextLabels.clear();
   } else if (action === "delete_draft") {
     nextLabels.delete("DRAFT");
   } else if (action === "star") {

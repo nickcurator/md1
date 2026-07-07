@@ -17,6 +17,7 @@ const ACTIONS = new Set<MailMessageAction>([
   "mark_unread",
   "archive",
   "trash",
+  "delete_forever",
   "delete_draft",
   "star",
   "unstar",
