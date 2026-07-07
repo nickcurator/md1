@@ -369,6 +369,12 @@ type MailBulkActionResponse = {
   error?: string;
 };
 
+type MailMoveResponse = {
+  workspace?: MailWorkspace;
+  affectedCount?: number;
+  error?: string;
+};
+
 type MailSyncResponse = {
   workspace?: MailWorkspace;
   loadedCount?: number;
@@ -666,6 +672,25 @@ export default function MailClient({
     [accountFolderGroups],
   );
 
+  const moveTargets = useMemo(() => {
+    if (!selectedAccount) return [];
+    const allowedSystemTargets = new Set(["INBOX", "SPAM", "TRASH"]);
+    return mailWorkspace.folders
+      .filter((folder) => {
+        if (folder.accountId !== selectedAccount.id) return false;
+        if (allowedSystemTargets.has(folder.providerFolderId)) return true;
+        if (HIDDEN_SYSTEM_LABELS.has(folder.providerFolderId)) return false;
+        if (folder.providerFolderId.startsWith("CATEGORY_")) return false;
+        return folder.kind === "custom";
+      })
+      .sort((a, b) => {
+        const aSystem = allowedSystemTargets.has(a.providerFolderId) ? 0 : 1;
+        const bSystem = allowedSystemTargets.has(b.providerFolderId) ? 0 : 1;
+        if (aSystem !== bSystem) return aSystem - bSystem;
+        return folderDisplayName(a).localeCompare(folderDisplayName(b));
+      });
+  }, [mailWorkspace.folders, selectedAccount]);
+
   const defaultFolderId =
     accountFolders.find((folder) => folder.kind === "inbox")?.id ??
     accountFolders[0]?.id ??
@@ -832,7 +857,9 @@ export default function MailClient({
   const allVisibleThreadsSelected =
     visibleThreads.length > 0 &&
     visibleThreads.every((thread) => selectedThreadIds.has(thread.id));
-  const bulkBusy = pendingAction?.startsWith("bulk:") ?? false;
+  const bulkBusy =
+    (pendingAction?.startsWith("bulk:") ?? false) ||
+    (pendingAction?.startsWith("bulk-move:") ?? false);
 
   function toggleThreadSelected(threadId: string) {
     setSelectedThreadIds((current) => {
@@ -1212,6 +1239,41 @@ export default function MailClient({
       );
     } catch (err) {
       setUiError(err instanceof Error ? err.message : "Bulk action failed");
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  async function moveMessages(
+    messageIds: string[],
+    targetProviderFolderId: string,
+    bulk = false,
+  ) {
+    if (messageIds.length === 0 || !targetProviderFolderId) return;
+    const key = `${bulk ? "bulk-" : ""}move:${targetProviderFolderId}`;
+    setPendingAction(key);
+    setUiError(null);
+    setUiNotice(null);
+    try {
+      const res = await fetch("/api/mail/messages/move", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          messageIds,
+          targetProviderFolderId,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as MailMoveResponse;
+      if (!res.ok) throw new Error(data.error || `Move failed (${res.status})`);
+      if (data.workspace) setMailWorkspace(data.workspace);
+      if (bulk) setSelectedThreadIds(new Set());
+      setUiNotice(
+        `Moved ${data.affectedCount ?? messageIds.length} message${
+          (data.affectedCount ?? messageIds.length) === 1 ? "" : "s"
+        }.`,
+      );
+    } catch (err) {
+      setUiError(err instanceof Error ? err.message : "Move failed");
     } finally {
       setPendingAction(null);
     }
@@ -1660,6 +1722,30 @@ export default function MailClient({
                         <Trash2 size={14} />
                       )}
                     </button>
+                    <select
+                      value=""
+                      title="Move selected"
+                      disabled={
+                        bulkBusy ||
+                        selectedBulkMessageIds.length === 0 ||
+                        moveTargets.length === 0
+                      }
+                      onChange={(event) => {
+                        const target = event.target.value;
+                        event.currentTarget.value = "";
+                        if (target) {
+                          void moveMessages(selectedBulkMessageIds, target, true);
+                        }
+                      }}
+                      className="h-7 w-24 rounded-md border border-[var(--border)] bg-[var(--bg)] px-1 text-xs text-[var(--fg)] outline-none disabled:opacity-50"
+                    >
+                      <option value="">Move</option>
+                      {moveTargets.map((folder) => (
+                        <option key={folder.id} value={folder.providerFolderId}>
+                          {folderDisplayName(folder)}
+                        </option>
+                      ))}
+                    </select>
                   </>
                 )}
               </div>
@@ -1808,46 +1894,70 @@ export default function MailClient({
                   </button>
                 </>
               )}
-              <button
-                type="button"
-                title={selectedMessage.starred ? "Unstar" : "Star"}
-                disabled={!!pendingAction}
-                onClick={() =>
-                  void runMessageAction(selectedMessage.starred ? "unstar" : "star")
-                }
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
-              >
-                <Star
-                  size={16}
-                  className={
-                    selectedMessage.starred
-                      ? "fill-yellow-400 text-yellow-500"
-                      : ""
-                  }
-                />
-              </button>
-              <button
-                type="button"
-                title={selectedMessage.unread ? "Mark read" : "Mark unread"}
-                disabled={!!pendingAction}
-                onClick={() =>
-                  void runMessageAction(
-                    selectedMessage.unread ? "mark_read" : "mark_unread",
-                  )
-                }
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
-              >
-                <Check size={16} />
-              </button>
-              <button
-                type="button"
-                title="Archive"
-                disabled={!!pendingAction}
-                onClick={() => void runMessageAction("archive")}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
-              >
-                <Archive size={16} />
-              </button>
+              {!selectedIsDraft && (
+                <>
+                  <button
+                    type="button"
+                    title={selectedMessage.starred ? "Unstar" : "Star"}
+                    disabled={!!pendingAction}
+                    onClick={() =>
+                      void runMessageAction(
+                        selectedMessage.starred ? "unstar" : "star",
+                      )
+                    }
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
+                  >
+                    <Star
+                      size={16}
+                      className={
+                        selectedMessage.starred
+                          ? "fill-yellow-400 text-yellow-500"
+                          : ""
+                      }
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    title={selectedMessage.unread ? "Mark read" : "Mark unread"}
+                    disabled={!!pendingAction}
+                    onClick={() =>
+                      void runMessageAction(
+                        selectedMessage.unread ? "mark_read" : "mark_unread",
+                      )
+                    }
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
+                  >
+                    <Check size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    title="Archive"
+                    disabled={!!pendingAction}
+                    onClick={() => void runMessageAction("archive")}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
+                  >
+                    <Archive size={16} />
+                  </button>
+                  <select
+                    value=""
+                    title="Move"
+                    disabled={!!pendingAction || moveTargets.length === 0}
+                    onChange={(event) => {
+                      const target = event.target.value;
+                      event.currentTarget.value = "";
+                      if (target) void moveMessages([selectedMessage.id], target);
+                    }}
+                    className="h-8 w-24 rounded-md border border-[var(--border)] bg-[var(--bg)] px-1 text-xs text-[var(--fg)] outline-none disabled:opacity-50"
+                  >
+                    <option value="">Move</option>
+                    {moveTargets.map((folder) => (
+                      <option key={folder.id} value={folder.providerFolderId}>
+                        {folderDisplayName(folder)}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              )}
               <button
                 type="button"
                 title={selectedIsDraft ? "Discard draft" : "Trash"}

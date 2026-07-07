@@ -2221,6 +2221,26 @@ async function gmailTrash(accessToken: string, providerMessageId: string) {
   }
 }
 
+async function gmailUntrash(accessToken: string, providerMessageId: string) {
+  const res = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(
+      providerMessageId,
+    )}/untrash`,
+    {
+      method: "POST",
+      headers: { authorization: `Bearer ${accessToken}` },
+    },
+  );
+  if (!res.ok) {
+    const data = (await res.json().catch(() => null)) as
+      | { error?: { message?: string } }
+      | null;
+    throw new Error(
+      data?.error?.message || `Gmail untrash failed (${res.status})`,
+    );
+  }
+}
+
 async function gmailTrashMessagesLimited(
   accessToken: string,
   providerMessageIds: string[],
@@ -2233,6 +2253,24 @@ async function gmailTrashMessagesLimited(
         const index = nextIndex;
         nextIndex += 1;
         await gmailTrash(accessToken, providerMessageIds[index]);
+        await wait(25);
+      }
+    }),
+  );
+}
+
+async function gmailUntrashMessagesLimited(
+  accessToken: string,
+  providerMessageIds: string[],
+): Promise<void> {
+  let nextIndex = 0;
+  const workerCount = Math.min(3, providerMessageIds.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < providerMessageIds.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        await gmailUntrash(accessToken, providerMessageIds[index]);
         await wait(25);
       }
     }),
@@ -2479,6 +2517,69 @@ async function updateLocalMessagesAfterBulkAction(input: {
   }
 }
 
+function applyMoveToLabels(labels: string[], targetProviderFolderId: string): string[] {
+  const next = new Set(labels);
+  if (targetProviderFolderId === "TRASH") {
+    next.delete("INBOX");
+    next.delete("SPAM");
+    next.add("TRASH");
+    return [...next];
+  }
+  next.delete("TRASH");
+  next.delete("SPAM");
+  if (targetProviderFolderId === "SPAM") {
+    next.delete("INBOX");
+    next.add("SPAM");
+    return [...next];
+  }
+  if (targetProviderFolderId === "INBOX") {
+    next.add("INBOX");
+    return [...next];
+  }
+  next.delete("INBOX");
+  next.add(targetProviderFolderId);
+  return [...next];
+}
+
+async function updateLocalMessagesAfterMove(input: {
+  ownerId: string;
+  accountId: string;
+  messages: MailMessageRow[];
+  targetProviderFolderId: string;
+}): Promise<void> {
+  const db = createAdminClient();
+  const folderIds = await listMailFolderIds({
+    ownerId: input.ownerId,
+    accountId: input.accountId,
+  });
+  const affectedThreadIds = new Set<string>();
+  const now = new Date().toISOString();
+
+  for (const message of input.messages) {
+    const labels = applyMoveToLabels(
+      stringArray(message.labels),
+      input.targetProviderFolderId,
+    );
+    const { error } = await db
+      .from("mail_messages")
+      .update({
+        folder_id: primaryFolderId(labels, folderIds),
+        labels,
+        unread: labels.includes("UNREAD"),
+        starred: labels.includes("STARRED"),
+        updated_at: now,
+      })
+      .eq("id", message.id)
+      .eq("owner_id", input.ownerId);
+    if (error) throw error;
+    if (message.thread_id) affectedThreadIds.add(message.thread_id);
+  }
+
+  for (const threadId of affectedThreadIds) {
+    await refreshOrRemoveThread({ ownerId: input.ownerId, threadId });
+  }
+}
+
 async function updateLocalMessageAfterAction(input: {
   ownerId: string;
   accountId: string;
@@ -2659,6 +2760,97 @@ export async function applyBulkMailMessageAction(input: {
       accountId,
       messages: accountMessages,
       action: input.action,
+    });
+    await syncGmailFolders({
+      ownerId: input.ownerId,
+      accountId,
+      accessToken,
+    });
+  }
+
+  return {
+    workspace: await listMailWorkspace(input.ownerId),
+    affectedCount: messages.length,
+  };
+}
+
+export async function moveMailMessages(input: {
+  ownerId: string;
+  messageIds: string[];
+  targetProviderFolderId: string;
+}): Promise<{ workspace: MailWorkspace; affectedCount: number }> {
+  const targetProviderFolderId = input.targetProviderFolderId.trim();
+  if (!targetProviderFolderId) throw new Error("Target folder is required");
+  const ids = [...new Set(input.messageIds)].filter(Boolean).slice(0, 500);
+  if (ids.length === 0) throw new Error("No messages selected");
+
+  const db = createAdminClient();
+  const { data: messageData, error: messageError } = await db
+    .from("mail_messages")
+    .select("*")
+    .eq("owner_id", input.ownerId)
+    .in("id", ids);
+  if (messageError) throw messageError;
+  const messages = (messageData as MailMessageRow[]).filter(
+    (message) => !stringArray(message.labels).includes("DRAFT"),
+  );
+  if (messages.length === 0) throw new Error("No movable messages selected");
+
+  const messagesByAccount = new Map<string, MailMessageRow[]>();
+  for (const message of messages) {
+    const list = messagesByAccount.get(message.account_id) ?? [];
+    list.push(message);
+    messagesByAccount.set(message.account_id, list);
+  }
+
+  for (const [accountId, accountMessages] of messagesByAccount.entries()) {
+    const { data: targetFolder, error: targetFolderError } = await db
+      .from("mail_folders")
+      .select("*")
+      .eq("owner_id", input.ownerId)
+      .eq("account_id", accountId)
+      .eq("provider_folder_id", targetProviderFolderId)
+      .maybeSingle();
+    if (targetFolderError) throw targetFolderError;
+    if (!targetFolder) throw new Error("Target folder not found");
+    const targetKind = (targetFolder as MailFolderRow).kind;
+    if (["sent", "drafts", "starred"].includes(targetKind)) {
+      throw new Error("This folder cannot be used as a move target");
+    }
+
+    const account = await getPrivateAccount(input.ownerId, accountId);
+    if (!account || account.provider !== "gmail") {
+      throw new Error("Mail account not found");
+    }
+    const accessToken = await gmailAccessToken(account);
+    const providerMessageIds = accountMessages.map(
+      (message) => message.provider_message_id,
+    );
+
+    if (targetProviderFolderId === "TRASH") {
+      await gmailTrashMessagesLimited(accessToken, providerMessageIds);
+    } else {
+      const trashedProviderMessageIds = accountMessages
+        .filter((message) => stringArray(message.labels).includes("TRASH"))
+        .map((message) => message.provider_message_id);
+      if (trashedProviderMessageIds.length > 0) {
+        await gmailUntrashMessagesLimited(accessToken, trashedProviderMessageIds);
+      }
+      const removeLabelIds = ["TRASH", "SPAM"];
+      if (targetProviderFolderId !== "INBOX") removeLabelIds.push("INBOX");
+      await gmailBatchModifyMessages(accessToken, providerMessageIds, {
+        addLabelIds: [targetProviderFolderId],
+        removeLabelIds: removeLabelIds.filter(
+          (label) => label !== targetProviderFolderId,
+        ),
+      });
+    }
+
+    await updateLocalMessagesAfterMove({
+      ownerId: input.ownerId,
+      accountId,
+      messages: accountMessages,
+      targetProviderFolderId,
     });
     await syncGmailFolders({
       ownerId: input.ownerId,
