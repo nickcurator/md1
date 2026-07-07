@@ -52,6 +52,44 @@ function folderIcon(kind: MailFolderKind, size = 16) {
   return <Mail size={size} />;
 }
 
+const ESSENTIAL_LABELS = new Set(["INBOX", "SENT"]);
+const MAILBOX_ORDER = ["INBOX", "STARRED", "SENT", "DRAFT", "SPAM", "TRASH"];
+const HIDDEN_SYSTEM_LABELS = new Set([
+  "CHAT",
+  "IMPORTANT",
+  "UNREAD",
+  "YELLOW_STAR",
+  "SNOOZED",
+]);
+
+function folderDisplayName(folder: MailFolder): string {
+  const categoryName = categoryLabelName(folder.providerFolderId);
+  if (categoryName) return categoryName;
+  return folder.kind === "custom" ? folder.name : folderKindLabel(folder.kind);
+}
+
+function mailboxRank(folder: MailFolder): number {
+  const rank = MAILBOX_ORDER.indexOf(folder.providerFolderId);
+  return rank === -1 ? 100 : rank;
+}
+
+function categoryLabelName(providerFolderId: string): string | null {
+  switch (providerFolderId) {
+    case "CATEGORY_PERSONAL":
+      return "Personal";
+    case "CATEGORY_SOCIAL":
+      return "Social";
+    case "CATEGORY_PROMOTIONS":
+      return "Promotions";
+    case "CATEGORY_UPDATES":
+      return "Updates";
+    case "CATEGORY_FORUMS":
+      return "Forums";
+    default:
+      return null;
+  }
+}
+
 function accountName(account: MailAccount): string {
   return account.displayName.trim() || account.email.split("@")[0] || account.email;
 }
@@ -97,12 +135,51 @@ export default function MailClient({
     workspace.accounts[0] ??
     null;
 
+  const accountThreadLabelCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    if (!selectedAccount) return counts;
+    for (const thread of workspace.threads) {
+      if (thread.accountId !== selectedAccount.id) continue;
+      for (const label of thread.labels) {
+        counts.set(label, (counts.get(label) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [selectedAccount, workspace.threads]);
+
+  const accountFolderGroups = useMemo(() => {
+    const folders = selectedAccount
+      ? workspace.folders.filter((folder) => folder.accountId === selectedAccount.id)
+      : [];
+    const visible = folders.filter((folder) => {
+      if (HIDDEN_SYSTEM_LABELS.has(folder.providerFolderId)) return false;
+      if (ESSENTIAL_LABELS.has(folder.providerFolderId)) return true;
+      return (accountThreadLabelCounts.get(folder.providerFolderId) ?? 0) > 0;
+    });
+    return {
+      mailboxes: visible
+        .filter((folder) => folder.kind !== "custom")
+        .sort((a, b) => mailboxRank(a) - mailboxRank(b)),
+      categories: visible
+        .filter((folder) => folder.providerFolderId.startsWith("CATEGORY_"))
+        .sort((a, b) => folderDisplayName(a).localeCompare(folderDisplayName(b))),
+      labels: visible
+        .filter(
+          (folder) =>
+            folder.kind === "custom" &&
+            !folder.providerFolderId.startsWith("CATEGORY_"),
+        )
+        .sort((a, b) => folderDisplayName(a).localeCompare(folderDisplayName(b))),
+    };
+  }, [accountThreadLabelCounts, selectedAccount, workspace.folders]);
+
   const accountFolders = useMemo(
-    () =>
-      selectedAccount
-        ? workspace.folders.filter((folder) => folder.accountId === selectedAccount.id)
-        : [],
-    [selectedAccount, workspace.folders],
+    () => [
+      ...accountFolderGroups.mailboxes,
+      ...accountFolderGroups.categories,
+      ...accountFolderGroups.labels,
+    ],
+    [accountFolderGroups],
   );
 
   const defaultFolderId =
@@ -233,10 +310,33 @@ export default function MailClient({
   const threadTitle = selectedThread?.subject || "Mail";
   const folderTitle =
     activeFolder?.kind === "custom"
-      ? (activeFolder?.name ?? "All mail")
+      ? (activeFolder ? folderDisplayName(activeFolder) : "All mail")
       : activeFolder
         ? folderKindLabel(activeFolder.kind)
         : "All mail";
+
+  function renderFolderButton(folder: MailFolder) {
+    const selected = activeFolderId === folder.id;
+    const count = accountThreadLabelCounts.get(folder.providerFolderId) ?? 0;
+    return (
+      <button
+        key={folder.id}
+        type="button"
+        onClick={() => setSelectedFolderId(folder.id)}
+        className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
+          selected
+            ? "bg-[var(--card)] text-[var(--fg)]"
+            : "text-[var(--muted)] hover:bg-[var(--card)]/80 hover:text-[var(--fg)]"
+        }`}
+      >
+        {folderIcon(folder.kind)}
+        <span className="min-w-0 flex-1 truncate">
+          {folderDisplayName(folder)}
+        </span>
+        {count > 0 && <span className="text-xs tabular-nums">{count}</span>}
+      </button>
+    );
+  }
 
   return (
     <div className="flex h-full min-h-0 bg-[var(--bg)] text-[var(--fg)]">
@@ -336,38 +436,38 @@ export default function MailClient({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
-          <div className="mb-1 px-2 text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-            Folders
-          </div>
           {selectedAccount ? (
-            <div className="space-y-0.5">
-              {accountFolders.map((folder) => {
-                const selected = activeFolderId === folder.id;
-                return (
-                  <button
-                    key={folder.id}
-                    type="button"
-                    onClick={() => setSelectedFolderId(folder.id)}
-                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
-                      selected
-                        ? "bg-[var(--card)] text-[var(--fg)]"
-                        : "text-[var(--muted)] hover:bg-[var(--card)]/80 hover:text-[var(--fg)]"
-                    }`}
-                  >
-                    {folderIcon(folder.kind)}
-                    <span className="min-w-0 flex-1 truncate">
-                      {folder.kind === "custom"
-                        ? folder.name
-                        : folderKindLabel(folder.kind)}
-                    </span>
-                    {folder.unreadCount > 0 && (
-                      <span className="text-xs tabular-nums">
-                        {folder.unreadCount}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
+            <div className="space-y-4">
+              {accountFolderGroups.mailboxes.length > 0 && (
+                <div>
+                  <div className="mb-1 px-2 text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
+                    Mailboxes
+                  </div>
+                  <div className="space-y-0.5">
+                    {accountFolderGroups.mailboxes.map(renderFolderButton)}
+                  </div>
+                </div>
+              )}
+              {accountFolderGroups.categories.length > 0 && (
+                <div>
+                  <div className="mb-1 px-2 text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
+                    Categories
+                  </div>
+                  <div className="space-y-0.5">
+                    {accountFolderGroups.categories.map(renderFolderButton)}
+                  </div>
+                </div>
+              )}
+              {accountFolderGroups.labels.length > 0 && (
+                <div>
+                  <div className="mb-1 px-2 text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
+                    Labels
+                  </div>
+                  <div className="space-y-0.5">
+                    {accountFolderGroups.labels.map(renderFolderButton)}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <p className="px-2 py-4 text-xs text-[var(--muted)]">

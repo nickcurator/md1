@@ -663,6 +663,52 @@ function gmailLabelKind(label: GmailLabel): MailFolderKind {
   }
 }
 
+function gmailLabelName(label: GmailLabel): string {
+  switch (label.id) {
+    case "INBOX":
+      return "Inbox";
+    case "SENT":
+      return "Sent";
+    case "DRAFT":
+      return "Drafts";
+    case "TRASH":
+      return "Trash";
+    case "SPAM":
+      return "Spam";
+    case "STARRED":
+      return "Starred";
+    case "CATEGORY_PERSONAL":
+      return "Personal";
+    case "CATEGORY_SOCIAL":
+      return "Social";
+    case "CATEGORY_PROMOTIONS":
+      return "Promotions";
+    case "CATEGORY_UPDATES":
+      return "Updates";
+    case "CATEGORY_FORUMS":
+      return "Forums";
+    default:
+      return label.name;
+  }
+}
+
+function shouldSyncGmailLabel(label: GmailLabel): boolean {
+  if (
+    [
+      "INBOX",
+      "SENT",
+      "DRAFT",
+      "TRASH",
+      "SPAM",
+      "STARRED",
+    ].includes(label.id)
+  ) {
+    return true;
+  }
+  if (label.id.startsWith("CATEGORY_")) return true;
+  return label.type === "user";
+}
+
 async function syncGmailFolders(input: {
   ownerId: string;
   accountId: string;
@@ -675,7 +721,7 @@ async function syncGmailFolders(input: {
   const labels = data.labels ?? [];
   const db = createAdminClient();
   const folderIdByProviderId = new Map<string, string>();
-  for (const label of labels) {
+  for (const label of labels.filter(shouldSyncGmailLabel)) {
     const { data: row, error } = await db
       .from("mail_folders")
       .upsert(
@@ -683,7 +729,7 @@ async function syncGmailFolders(input: {
           owner_id: input.ownerId,
           account_id: input.accountId,
           provider_folder_id: label.id,
-          name: label.name,
+          name: gmailLabelName(label),
           kind: gmailLabelKind(label),
           unread_count: label.messagesUnread ?? 0,
           total_count: label.messagesTotal ?? 0,
