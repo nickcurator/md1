@@ -13,6 +13,8 @@ function notFound() {
 
 type SyncBody = {
   accountId?: string;
+  providerFolderId?: string | null;
+  backfill?: boolean;
 };
 
 export async function POST(req: Request) {
@@ -31,11 +33,16 @@ export async function POST(req: Request) {
   }
 
   try {
-    const workspace = await syncGmailAccount({
+    const result = await syncGmailAccount({
       ownerId: user.id,
       accountId: body.accountId,
+      providerFolderId:
+        typeof body.providerFolderId === "string"
+          ? body.providerFolderId
+          : null,
+      backfill: body.backfill === true,
     });
-    return NextResponse.json({ workspace });
+    return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Sync failed" },

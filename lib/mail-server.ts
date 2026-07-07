@@ -28,6 +28,10 @@ export const GMAIL_SCOPES = [
 const FULL_GMAIL_SCOPE = "https://mail.google.com/";
 const MAX_EMPTY_TRASH_MESSAGES = 500;
 const GMAIL_BATCH_DELETE_CHUNK_SIZE = 500;
+const GMAIL_SYNC_PAGE_SIZE = 50;
+const MAIL_WORKSPACE_THREAD_LIMIT = 500;
+const MAIL_WORKSPACE_MESSAGE_LIMIT = 2000;
+const DEFAULT_GMAIL_CURSOR_KEY = "ALL";
 
 const MAIL_TABLE_SETUP_ERROR =
   "Mail database is not set up yet. Apply supabase/migrations/034_mail_client.sql.";
@@ -239,6 +243,30 @@ function jsonObject(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === "object" && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)
     : {};
+}
+
+function stringRecord(raw: unknown): Record<string, string | null> {
+  const object = jsonObject(raw);
+  return Object.fromEntries(
+    Object.entries(object)
+      .filter((entry): entry is [string, string | null] => {
+        const value = entry[1];
+        return typeof value === "string" || value === null;
+      }),
+  );
+}
+
+function booleanRecord(raw: unknown): Record<string, boolean> {
+  const object = jsonObject(raw);
+  return Object.fromEntries(
+    Object.entries(object).filter(
+      (entry): entry is [string, boolean] => typeof entry[1] === "boolean",
+    ),
+  );
+}
+
+function gmailCursorKey(providerFolderId: string | null | undefined): string {
+  return providerFolderId || DEFAULT_GMAIL_CURSOR_KEY;
 }
 
 function stringArray(raw: string[] | null): string[] {
@@ -534,13 +562,13 @@ export async function listMailWorkspace(
         .select("*")
         .eq("owner_id", ownerId)
         .order("last_message_at", { ascending: false, nullsFirst: false })
-        .limit(100),
+        .limit(MAIL_WORKSPACE_THREAD_LIMIT),
       db
         .from("mail_messages")
         .select("*")
         .eq("owner_id", ownerId)
-        .order("received_at", { ascending: true, nullsFirst: true })
-        .limit(500),
+        .order("received_at", { ascending: false, nullsFirst: false })
+        .limit(MAIL_WORKSPACE_MESSAGE_LIMIT),
     ]);
   const setupError = [
     accountsRes.error,
@@ -952,31 +980,58 @@ async function fetchGmailMessagesLimited(
   return results.filter(Boolean);
 }
 
-async function listRecentGmailMessages(
+async function listGmailMessagesPage(
   accessToken: string,
+  input: {
+    providerFolderId?: string | null;
+    pageToken?: string | null;
+  } = {},
 ): Promise<GmailMessageList> {
   const params = new URLSearchParams({
-    maxResults: "50",
-    q: "newer_than:180d",
+    maxResults: String(GMAIL_SYNC_PAGE_SIZE),
   });
+  if (input.providerFolderId) params.set("labelIds", input.providerFolderId);
+  if (input.pageToken) params.set("pageToken", input.pageToken);
   return googleJson<GmailMessageList>(
     accessToken,
     `https://gmail.googleapis.com/gmail/v1/users/me/messages?${params.toString()}`,
   );
 }
 
+export type GmailSyncResult = {
+  workspace: MailWorkspace;
+  loadedCount: number;
+  hasMore: boolean;
+  providerFolderId: string | null;
+};
+
 export async function syncGmailAccount(input: {
   ownerId: string;
   accountId: string;
-}): Promise<MailWorkspace> {
+  providerFolderId?: string | null;
+  backfill?: boolean;
+}): Promise<GmailSyncResult> {
   const account = await getPrivateAccount(input.ownerId, input.accountId);
   if (!account || account.provider !== "gmail") {
     throw new Error("Mail account not found");
   }
+  const providerFolderId =
+    typeof input.providerFolderId === "string" && input.providerFolderId.trim()
+      ? input.providerFolderId.trim()
+      : null;
+  const syncState = jsonObject(account.sync_state);
+  const cursorKey = gmailCursorKey(providerFolderId);
+  const cursors = stringRecord(syncState.gmailCursors);
+  const hasMoreByLabel = booleanRecord(syncState.gmailHasMoreByLabel);
+  const pageToken = input.backfill ? (cursors[cursorKey] ?? null) : null;
+
   await updateAccountStatus(account.id, input.ownerId, {
     status: "syncing",
     error: null,
   });
+
+  let parsedCount = 0;
+  let hasMore = false;
 
   try {
     const accessToken = await gmailAccessToken(account);
@@ -985,7 +1040,10 @@ export async function syncGmailAccount(input: {
       accountId: account.id,
       accessToken,
     });
-    const listed = await listRecentGmailMessages(accessToken);
+    const listed = await listGmailMessagesPage(accessToken, {
+      providerFolderId,
+      pageToken,
+    });
     const detailed = await fetchGmailMessagesLimited(
       accessToken,
       listed.messages ?? [],
@@ -997,6 +1055,8 @@ export async function syncGmailAccount(input: {
         const bTime = b.receivedAt ? new Date(b.receivedAt).getTime() : 0;
         return aTime - bTime;
       });
+    parsedCount = parsed.length;
+    hasMore = Boolean(listed.nextPageToken);
 
     const db = createAdminClient();
     for (const message of parsed) {
@@ -1054,13 +1114,25 @@ export async function syncGmailAccount(input: {
     }
 
     const profile = await fetchGmailProfile(accessToken);
+    const nextCursors = {
+      ...cursors,
+      [cursorKey]: listed.nextPageToken ?? null,
+    };
+    const nextHasMoreByLabel = {
+      ...hasMoreByLabel,
+      [cursorKey]: hasMore,
+    };
     await updateAccountStatus(account.id, input.ownerId, {
       status: "connected",
       error: null,
       last_synced_at: new Date().toISOString(),
       sync_state: {
+        ...syncState,
         ...(profile.historyId ? { historyId: profile.historyId } : {}),
-        recentMessageCount: parsed.length,
+        gmailCursors: nextCursors,
+        gmailHasMoreByLabel: nextHasMoreByLabel,
+        lastSyncProviderFolderId: providerFolderId,
+        recentMessageCount: parsedCount,
       },
     });
   } catch (err) {
@@ -1071,7 +1143,12 @@ export async function syncGmailAccount(input: {
     throw err;
   }
 
-  return listMailWorkspace(input.ownerId);
+  return {
+    workspace: await listMailWorkspace(input.ownerId),
+    loadedCount: parsedCount,
+    hasMore,
+    providerFolderId,
+  };
 }
 
 async function gmailModify(

@@ -110,6 +110,20 @@ function messageRecipients(recipients: MailMessage["toRecipients"]): string {
   return recipients.map(formatRecipient).join(", ");
 }
 
+function gmailSyncCursorKey(folder: MailFolder | null): string {
+  return folder?.providerFolderId ?? "ALL";
+}
+
+function hasMoreSyncedMail(
+  account: MailAccount | null,
+  folder: MailFolder | null,
+): boolean {
+  const raw = account?.syncState.gmailHasMoreByLabel;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return true;
+  const value = (raw as Record<string, unknown>)[gmailSyncCursorKey(folder)];
+  return typeof value === "boolean" ? value : true;
+}
+
 const BARE_URL_PATTERN = /https?:\/\/[^\s<>"']+/gi;
 const MARKDOWN_LINK_PATTERN = /\[([^\]]{1,160})\]\((https?:\/\/[^\s)]+)\)/gi;
 const PARENTHESIZED_URL_PATTERN =
@@ -313,6 +327,13 @@ type MailActionResponse = {
   message?: MailMessage;
   thread?: MailThread | null;
   workspace?: MailWorkspace;
+  error?: string;
+};
+
+type MailSyncResponse = {
+  workspace?: MailWorkspace;
+  loadedCount?: number;
+  hasMore?: boolean;
   error?: string;
 };
 
@@ -551,6 +572,11 @@ export default function MailClient({
   const activeFolderId = selectedFolderId ?? defaultFolderId;
   const activeFolder =
     accountFolders.find((folder) => folder.id === activeFolderId) ?? null;
+  const activeLoadMoreKey = selectedAccount
+    ? `load-more:${selectedAccount.id}:${gmailSyncCursorKey(activeFolder)}`
+    : null;
+  const loadingMore = activeLoadMoreKey !== null && pendingAction === activeLoadMoreKey;
+  const canLoadMore = hasMoreSyncedMail(selectedAccount, activeFolder);
   const normalizedQuery = query.trim().toLowerCase();
 
   const visibleThreads = useMemo(() => {
@@ -606,26 +632,51 @@ export default function MailClient({
     : [];
   const selectedMessage = selectedMessages[selectedMessages.length - 1] ?? null;
 
-  async function syncAccount(accountId: string) {
-    setSyncingAccountId(accountId);
+  async function syncAccount(
+    accountId: string,
+    options: {
+      providerFolderId?: string | null;
+      loadMore?: boolean;
+    } = {},
+  ) {
+    const loadMoreKey = `load-more:${accountId}:${options.providerFolderId ?? "ALL"}`;
+    if (options.loadMore) {
+      setPendingAction(loadMoreKey);
+    } else {
+      setSyncingAccountId(accountId);
+    }
     setUiError(null);
     setUiNotice(null);
     try {
       const res = await fetch("/api/mail/sync", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ accountId }),
+        body: JSON.stringify({
+          accountId,
+          providerFolderId: options.providerFolderId ?? null,
+          backfill: options.loadMore === true,
+        }),
       });
-      const data = (await res.json().catch(() => ({}))) as {
-        workspace?: MailWorkspace;
-        error?: string;
-      };
+      const data = (await res.json().catch(() => ({}))) as MailSyncResponse;
       if (!res.ok) throw new Error(data.error || `Sync failed (${res.status})`);
       if (data.workspace) setMailWorkspace(data.workspace);
+      if (options.loadMore) {
+        if ((data.loadedCount ?? 0) > 0) {
+          setUiNotice(
+            `Synced ${data.loadedCount} older message${data.loadedCount === 1 ? "" : "s"}.`,
+          );
+        } else if (data.hasMore === false) {
+          setUiNotice("No more messages in this mailbox.");
+        }
+      }
     } catch (err) {
       setUiError(err instanceof Error ? err.message : "Sync failed");
     } finally {
-      setSyncingAccountId(null);
+      if (options.loadMore) {
+        setPendingAction(null);
+      } else {
+        setSyncingAccountId(null);
+      }
     }
   }
 
@@ -993,72 +1044,106 @@ export default function MailClient({
               </a>
             </div>
           ) : visibleThreads.length === 0 ? (
-            <p className="px-3 py-8 text-center text-sm text-[var(--muted)]">
-              No messages here.
-            </p>
+            <div className="px-3 py-8 text-center">
+              <p className="text-sm text-[var(--muted)]">No messages here.</p>
+              {canLoadMore && (
+                <button
+                  type="button"
+                  disabled={!!pendingAction}
+                  onClick={() =>
+                    void syncAccount(selectedAccount.id, {
+                      providerFolderId: activeFolder?.providerFolderId ?? null,
+                      loadMore: true,
+                    })
+                  }
+                  className="mt-3 inline-flex h-8 items-center gap-2 rounded-md border border-[var(--border)] px-3 text-xs font-medium text-[var(--fg)] hover:bg-[var(--card)] disabled:opacity-50"
+                >
+                  {loadingMore && <Loader2 size={14} className="animate-spin" />}
+                  Load mail
+                </button>
+              )}
+            </div>
           ) : (
-            <ul className="space-y-0.5">
-              {visibleThreads.map((thread) => {
-                const selected = selectedThread?.id === thread.id;
-                return (
-                  <li key={thread.id}>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedThreadId(thread.id)}
-                      aria-label={`${thread.unread ? "Unread: " : ""}${thread.subject}`}
-                      className={`w-full rounded-lg px-3 py-2 text-left transition-colors ${
-                        selected
-                          ? "bg-[var(--card)] ring-1 ring-[var(--border)]"
-                          : thread.unread
-                            ? "bg-[var(--card)]/35 hover:bg-[var(--card)]/80"
-                            : "hover:bg-[var(--card)]/80"
-                      }`}
-                    >
-                      <span className="flex items-start gap-2">
-                        <span
-                          aria-hidden="true"
-                          className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
-                            thread.unread ? "bg-blue-400" : "bg-transparent"
-                          }`}
-                        />
-                        <span className="min-w-0 flex-1">
+            <>
+              <ul className="space-y-0.5">
+                {visibleThreads.map((thread) => {
+                  const selected = selectedThread?.id === thread.id;
+                  return (
+                    <li key={thread.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedThreadId(thread.id)}
+                        aria-label={`${thread.unread ? "Unread: " : ""}${thread.subject}`}
+                        className={`w-full rounded-lg px-3 py-2 text-left transition-colors ${
+                          selected
+                            ? "bg-[var(--card)] ring-1 ring-[var(--border)]"
+                            : thread.unread
+                              ? "bg-[var(--card)]/35 hover:bg-[var(--card)]/80"
+                              : "hover:bg-[var(--card)]/80"
+                        }`}
+                      >
+                        <span className="flex items-start gap-2">
                           <span
-                            className={`block truncate text-sm ${
-                              thread.unread ? "font-semibold" : "font-medium"
+                            aria-hidden="true"
+                            className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                              thread.unread ? "bg-blue-400" : "bg-transparent"
                             }`}
-                          >
-                            {threadSender(thread)}
-                          </span>
-                          <span
-                            className={`mt-0.5 block truncate text-sm ${
-                              thread.unread
-                                ? "font-semibold text-[var(--fg)]"
-                                : "text-[var(--fg)]"
-                            }`}
-                          >
-                            {thread.subject}
-                          </span>
-                        </span>
-                        <span className="shrink-0 text-[11px] text-[var(--muted)]">
-                          {formatDate(thread.lastMessageAt)}
-                        </span>
-                      </span>
-                      <span className="mt-1 flex items-center gap-1.5">
-                        {thread.starred && (
-                          <Star
-                            size={12}
-                            className="shrink-0 fill-yellow-400 text-yellow-500"
                           />
-                        )}
-                        <span className="line-clamp-2 text-xs leading-relaxed text-[var(--muted)]">
-                          {cleanMailText(thread.snippet)}
+                          <span className="min-w-0 flex-1">
+                            <span
+                              className={`block truncate text-sm ${
+                                thread.unread ? "font-semibold" : "font-medium"
+                              }`}
+                            >
+                              {threadSender(thread)}
+                            </span>
+                            <span
+                              className={`mt-0.5 block truncate text-sm ${
+                                thread.unread
+                                  ? "font-semibold text-[var(--fg)]"
+                                  : "text-[var(--fg)]"
+                              }`}
+                            >
+                              {thread.subject}
+                            </span>
+                          </span>
+                          <span className="shrink-0 text-[11px] text-[var(--muted)]">
+                            {formatDate(thread.lastMessageAt)}
+                          </span>
                         </span>
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+                        <span className="mt-1 flex items-center gap-1.5">
+                          {thread.starred && (
+                            <Star
+                              size={12}
+                              className="shrink-0 fill-yellow-400 text-yellow-500"
+                            />
+                          )}
+                          <span className="line-clamp-2 text-xs leading-relaxed text-[var(--muted)]">
+                            {cleanMailText(thread.snippet)}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="px-3 py-3">
+                <button
+                  type="button"
+                  disabled={!canLoadMore || !!pendingAction}
+                  onClick={() =>
+                    void syncAccount(selectedAccount.id, {
+                      providerFolderId: activeFolder?.providerFolderId ?? null,
+                      loadMore: true,
+                    })
+                  }
+                  className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md border border-[var(--border)] text-xs font-medium text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:cursor-default disabled:opacity-50"
+                >
+                  {loadingMore && <Loader2 size={14} className="animate-spin" />}
+                  {canLoadMore ? "Load more" : "All synced"}
+                </button>
+              </div>
+            </>
           )}
         </div>
       </section>
