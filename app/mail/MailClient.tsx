@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   Archive,
@@ -108,6 +108,205 @@ function messageSender(message: MailMessage): string {
 
 function messageRecipients(recipients: MailMessage["toRecipients"]): string {
   return recipients.map(formatRecipient).join(", ");
+}
+
+const BARE_URL_PATTERN = /https?:\/\/[^\s<>"']+/gi;
+const MARKDOWN_LINK_PATTERN = /\[([^\]]{1,160})\]\((https?:\/\/[^\s)]+)\)/gi;
+const PARENTHESIZED_URL_PATTERN =
+  /([^\n()[\]]{2,120}?)\s*\(\s*(https?:\/\/[^\s)]+)\s*\)/gi;
+const TRAILING_URL_PUNCTUATION = /[),.;:!?]+$/;
+
+function safeHttpUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function normalizeMailDisplayText(input: string): string {
+  return cleanMailText(input)
+    .replace(PARENTHESIZED_URL_PATTERN, (match, label, url) => {
+      const href = safeHttpUrl(url);
+      const text = String(label).replace(/^[\s,.;:!?-]+/, "").trim();
+      if (!href || text.length < 2) return match;
+      return `[${text}](${href})`;
+    })
+    .replace(/\)(?=[A-ZА-Я])/g, ") ");
+}
+
+function trimUrlToken(token: string): { url: string; suffix: string } {
+  let url = token;
+  let suffix = "";
+  while (TRAILING_URL_PUNCTUATION.test(url)) {
+    suffix = `${url.at(-1) ?? ""}${suffix}`;
+    url = url.slice(0, -1);
+  }
+  return { url, suffix };
+}
+
+function renderAnchor(href: string, children: ReactNode, key: string) {
+  return (
+    <a
+      key={key}
+      href={href}
+      target="_blank"
+      rel="noreferrer noopener"
+      className="break-words text-blue-400 underline decoration-blue-400/40 underline-offset-2 hover:text-blue-300 hover:decoration-blue-300"
+    >
+      {children}
+    </a>
+  );
+}
+
+function renderBareLinks(text: string, keyPrefix: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(BARE_URL_PATTERN)) {
+    const token = match[0];
+    const start = match.index ?? 0;
+    if (start > lastIndex) nodes.push(text.slice(lastIndex, start));
+
+    const { url, suffix } = trimUrlToken(token);
+    const href = safeHttpUrl(url);
+    nodes.push(
+      href ? renderAnchor(href, url, `${keyPrefix}-url-${start}`) : token,
+    );
+    if (suffix) nodes.push(suffix);
+    lastIndex = start + token.length;
+  }
+
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
+  return nodes;
+}
+
+function renderInlineMailText(text: string, keyPrefix: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(MARKDOWN_LINK_PATTERN)) {
+    const raw = match[0];
+    const label = match[1]?.trim() ?? "";
+    const url = match[2] ?? "";
+    const start = match.index ?? 0;
+
+    if (start > lastIndex) {
+      nodes.push(
+        ...renderBareLinks(
+          text.slice(lastIndex, start),
+          `${keyPrefix}-before-${start}`,
+        ),
+      );
+    }
+
+    const href = safeHttpUrl(url);
+    nodes.push(
+      href && label
+        ? renderAnchor(href, label, `${keyPrefix}-link-${start}`)
+        : raw,
+    );
+    lastIndex = start + raw.length;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(
+      ...renderBareLinks(text.slice(lastIndex), `${keyPrefix}-tail-${lastIndex}`),
+    );
+  }
+
+  return nodes;
+}
+
+function renderMailParagraph(
+  lines: string[],
+  key: string,
+  keyPrefix: string,
+): ReactNode {
+  return (
+    <p key={key} className="my-4">
+      {lines.map((line, lineIndex) => (
+        <span key={`${keyPrefix}-line-${lineIndex}`}>
+          {lineIndex > 0 && <br />}
+          {renderInlineMailText(line, `${keyPrefix}-line-${lineIndex}`)}
+        </span>
+      ))}
+    </p>
+  );
+}
+
+function renderMailList(
+  lines: string[],
+  key: string,
+  keyPrefix: string,
+): ReactNode {
+  return (
+    <ul key={key} className="my-4 list-disc space-y-1 pl-5">
+      {lines.map((line, lineIndex) => (
+        <li key={`${keyPrefix}-line-${lineIndex}`}>
+          {renderInlineMailText(line, `${keyPrefix}-line-${lineIndex}`)}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function renderMailBody(input: string): ReactNode {
+  const text = normalizeMailDisplayText(input);
+  if (!text) return null;
+
+  const nodes: ReactNode[] = [];
+  text.split(/\n{2,}/).forEach((block, blockIndex) => {
+    const lines = block.split("\n").map((line) => line.trimEnd());
+    let paragraphLines: string[] = [];
+    let listLines: string[] = [];
+    let groupIndex = 0;
+
+    const flushParagraph = () => {
+      if (!paragraphLines.some((line) => line.trim())) {
+        paragraphLines = [];
+        return;
+      }
+      nodes.push(
+        renderMailParagraph(
+          paragraphLines,
+          `block-${blockIndex}-group-${groupIndex}`,
+          `block-${blockIndex}-group-${groupIndex}`,
+        ),
+      );
+      paragraphLines = [];
+      groupIndex += 1;
+    };
+    const flushList = () => {
+      if (listLines.length === 0) return;
+      nodes.push(
+        renderMailList(
+          listLines,
+          `block-${blockIndex}-group-${groupIndex}`,
+          `block-${blockIndex}-group-${groupIndex}`,
+        ),
+      );
+      listLines = [];
+      groupIndex += 1;
+    };
+
+    for (const line of lines) {
+      const bullet = /^\s*[*-]\s+(.+)$/.exec(line);
+      if (bullet) {
+        flushParagraph();
+        listLines.push(bullet[1]);
+      } else {
+        flushList();
+        paragraphLines.push(line);
+      }
+    }
+
+    flushParagraph();
+    flushList();
+  });
+  return nodes;
 }
 
 type MailActionResponse = {
@@ -952,8 +1151,8 @@ export default function MailClient({
                 </div>
               </header>
 
-              <div className="whitespace-pre-wrap py-6 text-[15px] leading-7">
-                {cleanMailText(selectedMessage.bodyText || selectedMessage.snippet)}
+              <div className="py-6 text-[15px] leading-7">
+                {renderMailBody(selectedMessage.bodyText || selectedMessage.snippet)}
               </div>
             </article>
           )}
