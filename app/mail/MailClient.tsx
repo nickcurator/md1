@@ -492,18 +492,6 @@ export default function MailClient({
     return counts;
   }, [selectedAccount, mailWorkspace.threads]);
 
-  const accountUnreadLabelCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    if (!selectedAccount) return counts;
-    for (const thread of mailWorkspace.threads) {
-      if (thread.accountId !== selectedAccount.id || !thread.unread) continue;
-      for (const label of thread.labels) {
-        counts.set(label, (counts.get(label) ?? 0) + 1);
-      }
-    }
-    return counts;
-  }, [selectedAccount, mailWorkspace.threads]);
-
   const accountFolderGroups = useMemo(() => {
     const folders = selectedAccount
       ? mailWorkspace.folders.filter((folder) => folder.accountId === selectedAccount.id)
@@ -511,7 +499,11 @@ export default function MailClient({
     const visible = folders.filter((folder) => {
       if (HIDDEN_SYSTEM_LABELS.has(folder.providerFolderId)) return false;
       if (ESSENTIAL_LABELS.has(folder.providerFolderId)) return true;
-      return (accountThreadLabelCounts.get(folder.providerFolderId) ?? 0) > 0;
+      return (
+        folder.totalCount > 0 ||
+        folder.unreadCount > 0 ||
+        (accountThreadLabelCounts.get(folder.providerFolderId) ?? 0) > 0
+      );
     });
     return {
       mailboxes: visible
@@ -784,8 +776,8 @@ export default function MailClient({
 
   function renderFolderButton(folder: MailFolder) {
     const selected = activeFolderId === folder.id;
-    const count = accountThreadLabelCounts.get(folder.providerFolderId) ?? 0;
-    const unreadCount = accountUnreadLabelCounts.get(folder.providerFolderId) ?? 0;
+    const unreadCount = folder.unreadCount;
+    const totalCount = folder.totalCount;
     return (
       <button
         key={folder.id}
@@ -802,12 +794,18 @@ export default function MailClient({
           {folderDisplayName(folder)}
         </span>
         {unreadCount > 0 ? (
-          <span className="rounded-full bg-[var(--fg)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--bg)]">
+          <span
+            title={`${unreadCount} unread in Gmail`}
+            className="rounded-full bg-[var(--fg)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--bg)]"
+          >
             {unreadCount}
           </span>
-        ) : count > 0 ? (
-          <span className="text-xs tabular-nums text-[var(--muted)]">
-            {count}
+        ) : totalCount > 0 ? (
+          <span
+            title={`${totalCount} total in Gmail`}
+            className="text-xs tabular-nums text-[var(--muted)]"
+          >
+            {totalCount}
           </span>
         ) : null}
       </button>
@@ -963,9 +961,18 @@ export default function MailClient({
             <div className="min-w-0">
               <h1 className="truncate text-lg font-semibold">{folderTitle}</h1>
               {selectedAccount && (
-                <p className="truncate text-xs text-[var(--muted)]">
-                  {selectedAccount.email}
-                </p>
+                <>
+                  <p className="truncate text-xs text-[var(--muted)]">
+                    {selectedAccount.email}
+                  </p>
+                  {activeFolder && (
+                    <p className="truncate text-[11px] text-[var(--muted)]">
+                      {normalizedQuery
+                        ? `${visibleThreads.length} synced thread${visibleThreads.length === 1 ? "" : "s"} match search`
+                        : `Gmail total ${activeFolder.totalCount} · ${visibleThreads.length} synced thread${visibleThreads.length === 1 ? "" : "s"} shown`}
+                    </p>
+                  )}
+                </>
               )}
             </div>
             {selectedAccount && (
