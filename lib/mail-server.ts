@@ -832,6 +832,57 @@ async function fetchGmailMessage(
   );
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isGmailConcurrencyError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message.toLowerCase() : "";
+  return (
+    message.includes("too many concurrent requests") ||
+    message.includes("user-rate limit exceeded") ||
+    message.includes("rate limit")
+  );
+}
+
+async function fetchGmailMessageWithRetry(
+  accessToken: string,
+  id: string,
+): Promise<GmailMessage> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      return await fetchGmailMessage(accessToken, id);
+    } catch (err) {
+      if (!isGmailConcurrencyError(err) || attempt === 3) throw err;
+      await wait(1200 * (attempt + 1));
+    }
+  }
+  throw new Error("Gmail message fetch failed");
+}
+
+async function fetchGmailMessagesLimited(
+  accessToken: string,
+  messages: { id: string }[],
+): Promise<GmailMessage[]> {
+  const results: GmailMessage[] = [];
+  let nextIndex = 0;
+  const workerCount = Math.min(3, messages.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < messages.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await fetchGmailMessageWithRetry(
+          accessToken,
+          messages[index].id,
+        );
+        await wait(80);
+      }
+    }),
+  );
+  return results.filter(Boolean);
+}
+
 async function listRecentGmailMessages(
   accessToken: string,
 ): Promise<GmailMessageList> {
@@ -866,8 +917,9 @@ export async function syncGmailAccount(input: {
       accessToken,
     });
     const listed = await listRecentGmailMessages(accessToken);
-    const detailed = await Promise.all(
-      (listed.messages ?? []).map((m) => fetchGmailMessage(accessToken, m.id)),
+    const detailed = await fetchGmailMessagesLimited(
+      accessToken,
+      listed.messages ?? [],
     );
     const parsed = detailed
       .map((message) => parseGmailMessage(message, folderIdByProviderId))

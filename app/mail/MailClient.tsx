@@ -125,13 +125,20 @@ export default function MailClient({
   }, [accountFolders, defaultFolderId, selectedAccount, selectedFolderId]);
 
   const activeFolderId = selectedFolderId ?? defaultFolderId;
+  const activeFolder =
+    accountFolders.find((folder) => folder.id === activeFolderId) ?? null;
   const normalizedQuery = query.trim().toLowerCase();
 
   const visibleThreads = useMemo(() => {
     if (!selectedAccount) return [];
     return workspace.threads.filter((thread) => {
       if (thread.accountId !== selectedAccount.id) return false;
-      if (activeFolderId && thread.folderId !== activeFolderId) return false;
+      if (
+        activeFolder &&
+        !thread.labels.includes(activeFolder.providerFolderId)
+      ) {
+        return false;
+      }
       if (!normalizedQuery) return true;
       const haystack = [
         thread.subject,
@@ -142,7 +149,7 @@ export default function MailClient({
         .toLowerCase();
       return haystack.includes(normalizedQuery);
     });
-  }, [activeFolderId, normalizedQuery, selectedAccount, workspace.threads]);
+  }, [activeFolder, normalizedQuery, selectedAccount, workspace.threads]);
 
   useEffect(() => {
     if (!visibleThreads.length) {
@@ -225,8 +232,11 @@ export default function MailClient({
 
   const threadTitle = selectedThread?.subject || "Mail";
   const folderTitle =
-    accountFolders.find((folder) => folder.id === activeFolderId)?.name ??
-    "All mail";
+    activeFolder?.kind === "custom"
+      ? (activeFolder?.name ?? "All mail")
+      : activeFolder
+        ? folderKindLabel(activeFolder.kind)
+        : "All mail";
 
   return (
     <div className="flex h-full min-h-0 bg-[var(--bg)] text-[var(--fg)]">
