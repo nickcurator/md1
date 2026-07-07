@@ -22,6 +22,10 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  if (pathname === "/api/mail/env-check") {
+    return NextResponse.next();
+  }
+
   if (pathname.startsWith("/admin")) {
     let response = NextResponse.next({ request });
     const supabase = createDriveMiddlewareClient(request, response);
