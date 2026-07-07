@@ -294,6 +294,37 @@ export default function MailClient({
     }
   }
 
+  async function emptyTrash(accountId: string) {
+    const ok = window.confirm(
+      "Delete every message in Trash forever? This cannot be undone.",
+    );
+    if (!ok) return;
+    setPendingAction("empty-trash");
+    setUiError(null);
+    try {
+      const res = await fetch(`/api/mail/accounts/${accountId}/empty-trash`, {
+        method: "POST",
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        deletedCount?: number;
+        hasMore?: boolean;
+        error?: string;
+      };
+      if (!res.ok) {
+        throw new Error(data.error || `Empty Trash failed (${res.status})`);
+      }
+      if (data.hasMore) {
+        window.alert(
+          `Deleted ${data.deletedCount ?? 0} messages. Trash still has more messages; run Empty Trash again.`,
+        );
+      }
+      window.location.reload();
+    } catch (err) {
+      setUiError(err instanceof Error ? err.message : "Empty Trash failed");
+      setPendingAction(null);
+    }
+  }
+
   async function runMessageAction(action: string) {
     if (!selectedMessage) return;
     setPendingAction(action);
@@ -499,20 +530,38 @@ export default function MailClient({
               )}
             </div>
             {selectedAccount && (
-              <button
-                type="button"
-                title="Sync"
-                disabled={syncingAccountId === selectedAccount.id}
-                onClick={() => void syncAccount(selectedAccount.id)}
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
-              >
-                <RefreshCw
-                  size={16}
-                  className={
-                    syncingAccountId === selectedAccount.id ? "animate-spin" : ""
-                  }
-                />
-              </button>
+              <div className="flex shrink-0 items-center gap-1">
+                {activeFolder?.providerFolderId === "TRASH" && (
+                  <button
+                    type="button"
+                    title="Empty Trash"
+                    disabled={!!pendingAction}
+                    onClick={() => void emptyTrash(selectedAccount.id)}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-red-500 hover:bg-[var(--card)] disabled:opacity-50"
+                  >
+                    {pendingAction === "empty-trash" ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Trash2 size={14} />
+                    )}
+                    Empty
+                  </button>
+                )}
+                <button
+                  type="button"
+                  title="Sync"
+                  disabled={syncingAccountId === selectedAccount.id}
+                  onClick={() => void syncAccount(selectedAccount.id)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
+                >
+                  <RefreshCw
+                    size={16}
+                    className={
+                      syncingAccountId === selectedAccount.id ? "animate-spin" : ""
+                    }
+                  />
+                </button>
+              </div>
             )}
           </div>
           <label className="mt-3 flex h-9 items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--card)] px-2 text-sm">

@@ -19,9 +19,11 @@ export const GMAIL_SCOPES = [
   "openid",
   "email",
   "profile",
-  "https://www.googleapis.com/auth/gmail.modify",
-  "https://www.googleapis.com/auth/gmail.send",
+  "https://mail.google.com/",
 ] as const;
+
+const FULL_GMAIL_SCOPE = "https://mail.google.com/";
+const MAX_EMPTY_TRASH_MESSAGES = 500;
 
 const MAIL_TABLE_SETUP_ERROR =
   "Mail database is not set up yet. Apply supabase/migrations/034_mail_client.sql.";
@@ -1114,6 +1116,154 @@ async function gmailTrash(accessToken: string, providerMessageId: string) {
   }
 }
 
+async function gmailPermanentDelete(
+  accessToken: string,
+  providerMessageId: string,
+) {
+  const res = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(
+      providerMessageId,
+    )}`,
+    {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${accessToken}` },
+    },
+  );
+  if (!res.ok) {
+    const data = (await res.json().catch(() => null)) as
+      | { error?: { message?: string } }
+      | null;
+    throw new Error(
+      data?.error?.message || `Gmail delete failed (${res.status})`,
+    );
+  }
+}
+
+function hasFullGmailScope(account: MailAccountRow): boolean {
+  return (account.scopes ?? []).includes(FULL_GMAIL_SCOPE);
+}
+
+async function listGmailTrashMessageIds(
+  accessToken: string,
+): Promise<{ ids: string[]; hasMore: boolean }> {
+  const ids: string[] = [];
+  let pageToken: string | undefined;
+  do {
+    const params = new URLSearchParams({
+      labelIds: "TRASH",
+      maxResults: "100",
+    });
+    if (pageToken) params.set("pageToken", pageToken);
+    const page = await googleJson<GmailMessageList>(
+      accessToken,
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages?${params.toString()}`,
+    );
+    ids.push(...(page.messages ?? []).map((message) => message.id));
+    pageToken = page.nextPageToken;
+  } while (pageToken && ids.length < MAX_EMPTY_TRASH_MESSAGES);
+
+  return {
+    ids: ids.slice(0, MAX_EMPTY_TRASH_MESSAGES),
+    hasMore: Boolean(pageToken),
+  };
+}
+
+async function deleteGmailMessagesLimited(
+  accessToken: string,
+  providerMessageIds: string[],
+): Promise<void> {
+  let nextIndex = 0;
+  const workerCount = Math.min(3, providerMessageIds.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < providerMessageIds.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        await gmailPermanentDelete(accessToken, providerMessageIds[index]);
+        await wait(120);
+      }
+    }),
+  );
+}
+
+async function refreshOrRemoveThread(input: {
+  ownerId: string;
+  threadId: string;
+}): Promise<void> {
+  const db = createAdminClient();
+  const { data: remaining, error: remainingError } = await db
+    .from("mail_messages")
+    .select("*")
+    .eq("owner_id", input.ownerId)
+    .eq("thread_id", input.threadId)
+    .order("received_at", { ascending: false, nullsFirst: false })
+    .limit(1);
+  if (remainingError) throw remainingError;
+
+  const latest = (remaining as MailMessageRow[])[0];
+  if (!latest) {
+    const { error: deleteThreadError } = await db
+      .from("mail_threads")
+      .delete()
+      .eq("id", input.threadId)
+      .eq("owner_id", input.ownerId);
+    if (deleteThreadError) throw deleteThreadError;
+    return;
+  }
+
+  const { error: updateThreadError } = await db
+    .from("mail_threads")
+    .update({
+      folder_id: latest.folder_id,
+      subject: latest.subject,
+      snippet: latest.snippet,
+      last_message_at: latest.received_at,
+      unread: latest.unread,
+      starred: latest.starred,
+      labels: latest.labels,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", input.threadId)
+    .eq("owner_id", input.ownerId);
+  if (updateThreadError) throw updateThreadError;
+}
+
+async function removeLocalDeletedMessages(input: {
+  ownerId: string;
+  accountId: string;
+  providerMessageIds: string[];
+}): Promise<void> {
+  if (input.providerMessageIds.length === 0) return;
+  const db = createAdminClient();
+  const affectedThreadIds = new Set<string>();
+
+  for (let i = 0; i < input.providerMessageIds.length; i += 100) {
+    const ids = input.providerMessageIds.slice(i, i + 100);
+    const { data: localRows, error: selectError } = await db
+      .from("mail_messages")
+      .select("id, thread_id")
+      .eq("owner_id", input.ownerId)
+      .eq("account_id", input.accountId)
+      .in("provider_message_id", ids);
+    if (selectError) throw selectError;
+    for (const row of localRows as { id: string; thread_id: string | null }[]) {
+      if (row.thread_id) affectedThreadIds.add(row.thread_id);
+    }
+
+    const { error: deleteMessagesError } = await db
+      .from("mail_messages")
+      .delete()
+      .eq("owner_id", input.ownerId)
+      .eq("account_id", input.accountId)
+      .in("provider_message_id", ids);
+    if (deleteMessagesError) throw deleteMessagesError;
+  }
+
+  for (const threadId of affectedThreadIds) {
+    await refreshOrRemoveThread({ ownerId: input.ownerId, threadId });
+  }
+}
+
 async function updateLocalMessageFromGmail(input: {
   ownerId: string;
   accountId: string;
@@ -1235,6 +1385,31 @@ export async function applyMailMessageAction(input: {
     accessToken,
     providerMessageId: message.provider_message_id,
   });
+}
+
+export async function emptyGmailTrash(input: {
+  ownerId: string;
+  accountId: string;
+}): Promise<{ deletedCount: number; hasMore: boolean }> {
+  const account = await getPrivateAccount(input.ownerId, input.accountId);
+  if (!account || account.provider !== "gmail") {
+    throw new Error("Mail account not found");
+  }
+  if (!hasFullGmailScope(account)) {
+    throw new Error(
+      "Reconnect this Gmail account to grant permanent delete access.",
+    );
+  }
+
+  const accessToken = await gmailAccessToken(account);
+  const trash = await listGmailTrashMessageIds(accessToken);
+  await deleteGmailMessagesLimited(accessToken, trash.ids);
+  await removeLocalDeletedMessages({
+    ownerId: input.ownerId,
+    accountId: account.id,
+    providerMessageIds: trash.ids,
+  });
+  return { deletedCount: trash.ids.length, hasMore: trash.hasMore };
 }
 
 export async function deleteMailAccount(input: {
