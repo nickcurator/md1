@@ -1734,6 +1734,10 @@ export async function syncGmailAccount(input: {
   const cursorKey = gmailCursorKey(providerFolderId);
   const cursors = stringRecord(syncState.gmailCursors);
   const hasMoreByLabel = booleanRecord(syncState.gmailHasMoreByLabel);
+  const hasSyncedCursor = Object.prototype.hasOwnProperty.call(
+    cursors,
+    cursorKey,
+  );
   const pageToken = input.backfill ? (cursors[cursorKey] ?? null) : null;
 
   await updateAccountStatus(account.id, input.ownerId, {
@@ -1755,7 +1759,9 @@ export async function syncGmailAccount(input: {
 
     const historyId =
       typeof syncState.historyId === "string" ? syncState.historyId : null;
-    const canUseHistory = Boolean(historyId && !input.backfill && !providerFolderId);
+    const canUseHistory = Boolean(
+      historyId && !input.backfill && hasSyncedCursor,
+    );
     let usedHistory = false;
 
     if (canUseHistory && historyId) {

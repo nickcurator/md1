@@ -718,6 +718,18 @@ function applyOptimisticMessageAction(
   return { ...workspace, messages, threads };
 }
 
+function applyOptimisticMessageActions(
+  workspace: MailWorkspace,
+  messageIds: string[],
+  action: MailMessageAction,
+): MailWorkspace {
+  return messageIds.reduce(
+    (nextWorkspace, messageId) =>
+      applyOptimisticMessageAction(nextWorkspace, messageId, action),
+    workspace,
+  );
+}
+
 function mergeMailActionResponse(
   workspace: MailWorkspace,
   response: MailActionResponse,
@@ -1025,6 +1037,25 @@ export default function MailClient({
   const messageBodyLoading =
     selectedMessage !== null && messageBodyIsLoading(selectedMessage);
   const selectedIsDraft = isDraftMessage(selectedMessage);
+  const selectedThreadActionMessageIds = useMemo(
+    () =>
+      selectedMessages
+        .filter((message) => !message.labels.includes("DRAFT"))
+        .map((message) => message.id),
+    [selectedMessages],
+  );
+  const selectedThreadUnread =
+    selectedThreadActionMessageIds.length > 0 &&
+    selectedMessages.some(
+      (message) =>
+        selectedThreadActionMessageIds.includes(message.id) && message.unread,
+    );
+  const selectedThreadStarred =
+    selectedThread?.starred === true ||
+    selectedMessages.some(
+      (message) =>
+        selectedThreadActionMessageIds.includes(message.id) && message.starred,
+    );
   const selectedBulkThreads = visibleThreads.filter((thread) =>
     selectedThreadIds.has(thread.id),
   );
@@ -1566,20 +1597,49 @@ export default function MailClient({
     setPendingAction(action);
     setUiError(null);
     setUiNotice(null);
-    if (action !== "delete_draft") {
-      setMailWorkspace((current) =>
-        applyOptimisticMessageAction(current, selectedMessage.id, action),
-      );
-    }
     try {
-      const res = await fetch(`/api/mail/messages/${selectedMessage.id}/action`, {
+      if (action === "delete_draft") {
+        const res = await fetch(`/api/mail/messages/${selectedMessage.id}/action`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action }),
+        });
+        const data = (await res.json().catch(() => ({}))) as MailActionResponse;
+        if (!res.ok) throw new Error(data.error || `Action failed (${res.status})`);
+        setMailWorkspace((current) => mergeMailActionResponse(current, data));
+        return;
+      }
+
+      if (selectedThreadActionMessageIds.length === 0) return;
+      setMailWorkspace((current) =>
+        applyOptimisticMessageActions(
+          current,
+          selectedThreadActionMessageIds,
+          action,
+        ),
+      );
+      const res = await fetch("/api/mail/messages/bulk-action", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({
+          action,
+          messageIds: selectedThreadActionMessageIds,
+        }),
       });
-      const data = (await res.json().catch(() => ({}))) as MailActionResponse;
+      const data = (await res.json().catch(() => ({}))) as MailBulkActionResponse;
       if (!res.ok) throw new Error(data.error || `Action failed (${res.status})`);
-      setMailWorkspace((current) => mergeMailActionResponse(current, data));
+      if (data.workspace) {
+        setMailWorkspace((current) =>
+          mergeWorkspacePreservingMessageBodies(data.workspace!, current),
+        );
+      }
+      setUiNotice(
+        `Updated ${data.affectedCount ?? selectedThreadActionMessageIds.length} message${
+          (data.affectedCount ?? selectedThreadActionMessageIds.length) === 1
+            ? ""
+            : "s"
+        }.`,
+      );
     } catch (err) {
       setMailWorkspace(previousWorkspace);
       setUiError(err instanceof Error ? err.message : "Action failed");
@@ -1848,9 +1908,17 @@ export default function MailClient({
                     </button>
                     <button
                       type="button"
-                      title="Sync"
+                      title="Refresh"
                       disabled={busy}
-                      onClick={() => void syncAccount(account.id)}
+                      onClick={() =>
+                        void syncAccount(account.id, {
+                          providerFolderId:
+                            selectedAccount?.id === account.id
+                              ? (activeFolder?.providerFolderId ?? null)
+                              : null,
+                          maxResults: 20,
+                        })
+                      }
                       className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--bg)] hover:text-[var(--fg)] disabled:opacity-50"
                     >
                       <RefreshCw size={14} className={busy ? "animate-spin" : ""} />
@@ -2327,11 +2395,13 @@ export default function MailClient({
                 <>
                   <button
                     type="button"
-                    title={selectedMessage.starred ? "Unstar" : "Star"}
-                    disabled={!!pendingAction}
+                    title={selectedThreadStarred ? "Unstar thread" : "Star thread"}
+                    disabled={
+                      !!pendingAction || selectedThreadActionMessageIds.length === 0
+                    }
                     onClick={() =>
                       void runMessageAction(
-                        selectedMessage.starred ? "unstar" : "star",
+                        selectedThreadStarred ? "unstar" : "star",
                       )
                     }
                     className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
@@ -2339,7 +2409,7 @@ export default function MailClient({
                     <Star
                       size={16}
                       className={
-                        selectedMessage.starred
+                        selectedThreadStarred
                           ? "fill-yellow-400 text-yellow-500"
                           : ""
                       }
@@ -2347,11 +2417,17 @@ export default function MailClient({
                   </button>
                   <button
                     type="button"
-                    title={selectedMessage.unread ? "Mark read" : "Mark unread"}
-                    disabled={!!pendingAction}
+                    title={
+                      selectedThreadUnread
+                        ? "Mark thread read"
+                        : "Mark thread unread"
+                    }
+                    disabled={
+                      !!pendingAction || selectedThreadActionMessageIds.length === 0
+                    }
                     onClick={() =>
                       void runMessageAction(
-                        selectedMessage.unread ? "mark_read" : "mark_unread",
+                        selectedThreadUnread ? "mark_read" : "mark_unread",
                       )
                     }
                     className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
@@ -2360,8 +2436,10 @@ export default function MailClient({
                   </button>
                   <button
                     type="button"
-                    title="Archive"
-                    disabled={!!pendingAction}
+                    title="Archive thread"
+                    disabled={
+                      !!pendingAction || selectedThreadActionMessageIds.length === 0
+                    }
                     onClick={() => void runMessageAction("archive")}
                     className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
                   >
@@ -2369,12 +2447,16 @@ export default function MailClient({
                   </button>
                   <select
                     value=""
-                    title="Move"
-                    disabled={!!pendingAction || moveTargets.length === 0}
+                    title="Move thread"
+                    disabled={
+                      !!pendingAction ||
+                      moveTargets.length === 0 ||
+                      selectedThreadActionMessageIds.length === 0
+                    }
                     onChange={(event) => {
                       const target = event.target.value;
                       event.currentTarget.value = "";
-                      if (target) void moveMessages([selectedMessage.id], target);
+                      if (target) void moveMessages(selectedThreadActionMessageIds, target);
                     }}
                     className="h-8 w-24 rounded-md border border-[var(--border)] bg-[var(--bg)] px-1 text-xs text-[var(--fg)] outline-none disabled:opacity-50"
                   >
@@ -2390,7 +2472,10 @@ export default function MailClient({
               <button
                 type="button"
                 title={selectedIsDraft ? "Discard draft" : "Trash"}
-                disabled={!!pendingAction}
+                disabled={
+                  !!pendingAction ||
+                  (!selectedIsDraft && selectedThreadActionMessageIds.length === 0)
+                }
                 onClick={() =>
                   void runMessageAction(
                     selectedIsDraft ? "delete_draft" : "trash",
