@@ -15,6 +15,7 @@ type SyncBody = {
   accountId?: string;
   providerFolderId?: string | null;
   backfill?: boolean;
+  maxResults?: number;
 };
 
 export async function POST(req: Request) {
@@ -41,6 +42,10 @@ export async function POST(req: Request) {
           ? body.providerFolderId
           : null,
       backfill: body.backfill === true,
+      maxResults:
+        typeof body.maxResults === "number"
+          ? Math.min(50, Math.max(1, Math.trunc(body.maxResults)))
+          : undefined,
     });
     return NextResponse.json(result);
   } catch (err) {

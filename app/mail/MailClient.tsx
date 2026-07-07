@@ -396,6 +396,11 @@ type MailSendResponse = {
   error?: string;
 };
 
+type MailMessageDetailResponse = {
+  message?: MailMessage;
+  error?: string;
+};
+
 type ComposeMode = "compose" | "reply" | "forward" | "draft";
 
 type ComposeState = {
@@ -509,6 +514,28 @@ function isDraftMessage(message: MailMessage | null): boolean {
   return Boolean(message?.labels.includes("DRAFT"));
 }
 
+function mergeWorkspacePreservingMessageBodies(
+  nextWorkspace: MailWorkspace,
+  currentWorkspace: MailWorkspace,
+): MailWorkspace {
+  const currentById = new Map(
+    currentWorkspace.messages.map((message) => [message.id, message]),
+  );
+  return {
+    ...nextWorkspace,
+    messages: nextWorkspace.messages.map((message) => {
+      if (message.bodyText || message.bodyHtml) return message;
+      const current = currentById.get(message.id);
+      if (!current?.bodyText && !current?.bodyHtml) return message;
+      return {
+        ...message,
+        bodyText: current.bodyText,
+        bodyHtml: current.bodyHtml,
+      };
+    }),
+  };
+}
+
 function applyOptimisticMessageAction(
   workspace: MailWorkspace,
   messageId: string,
@@ -554,7 +581,9 @@ function mergeMailActionResponse(
   workspace: MailWorkspace,
   response: MailActionResponse,
 ): MailWorkspace {
-  if (response.workspace) return response.workspace;
+  if (response.workspace) {
+    return mergeWorkspacePreservingMessageBodies(response.workspace, workspace);
+  }
   if (!response.message) return workspace;
 
   const messageExists = workspace.messages.some(
@@ -615,6 +644,12 @@ export default function MailClient({
   );
   const [compose, setCompose] = useState<ComposeState | null>(null);
   const [showCcBcc, setShowCcBcc] = useState(false);
+  const [messageDetailLoadingId, setMessageDetailLoadingId] = useState<
+    string | null
+  >(null);
+  const [loadedMessageDetailIds, setLoadedMessageDetailIds] = useState<
+    Set<string>
+  >(() => new Set());
 
   const selectedAccount =
     mailWorkspace.accounts.find((account) => account.id === selectedAccountId) ??
@@ -833,6 +868,11 @@ export default function MailClient({
         })
     : [];
   const selectedMessage = selectedMessages[selectedMessages.length - 1] ?? null;
+  const messageBodyLoading =
+    selectedMessage !== null &&
+    messageDetailLoadingId === selectedMessage.id &&
+    !selectedMessage.bodyText &&
+    !selectedMessage.bodyHtml;
   const selectedIsDraft = isDraftMessage(selectedMessage);
   const selectedBulkThreads = visibleThreads.filter((thread) =>
     selectedThreadIds.has(thread.id),
@@ -860,6 +900,66 @@ export default function MailClient({
   const bulkBusy =
     (pendingAction?.startsWith("bulk:") ?? false) ||
     (pendingAction?.startsWith("bulk-move:") ?? false);
+
+  useEffect(() => {
+    if (
+      !selectedMessage ||
+      selectedMessage.bodyText ||
+      selectedMessage.bodyHtml ||
+      loadedMessageDetailIds.has(selectedMessage.id)
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    setMessageDetailLoadingId(selectedMessage.id);
+    fetch(`/api/mail/messages/${encodeURIComponent(selectedMessage.id)}`)
+      .then(async (res) => {
+        const data = (await res.json().catch(() => ({}))) as MailMessageDetailResponse;
+        if (!res.ok) {
+          throw new Error(data.error || `Message load failed (${res.status})`);
+        }
+        const detailMessage = data.message;
+        if (!detailMessage || cancelled) return;
+        setLoadedMessageDetailIds((current) => {
+          if (current.has(detailMessage.id)) return current;
+          const next = new Set(current);
+          next.add(detailMessage.id);
+          return next;
+        });
+        setMailWorkspace((current) => ({
+          ...current,
+          messages: current.messages.some(
+            (message) => message.id === detailMessage.id,
+          )
+            ? current.messages.map((message) =>
+                message.id === detailMessage.id ? detailMessage : message,
+              )
+            : [detailMessage, ...current.messages],
+        }));
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setUiError(err instanceof Error ? err.message : "Message load failed");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setMessageDetailLoadingId((current) =>
+            current === selectedMessage.id ? null : current,
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    loadedMessageDetailIds,
+    selectedMessage,
+    selectedMessage?.bodyHtml,
+    selectedMessage?.bodyText,
+  ]);
 
   function toggleThreadSelected(threadId: string) {
     setSelectedThreadIds((current) => {
@@ -975,7 +1075,11 @@ export default function MailClient({
       });
       const data = (await res.json().catch(() => ({}))) as MailSendResponse;
       if (!res.ok) throw new Error(data.error || `Send failed (${res.status})`);
-      if (data.workspace) setMailWorkspace(data.workspace);
+      if (data.workspace) {
+        setMailWorkspace((current) =>
+          mergeWorkspacePreservingMessageBodies(data.workspace!, current),
+        );
+      }
       setSelectedAccountId(accountId);
       if (mode === "compose" || mode === "forward" || mode === "draft") {
         const sentFolder =
@@ -1021,7 +1125,11 @@ export default function MailClient({
       if (!res.ok) {
         throw new Error(data.error || `Draft save failed (${res.status})`);
       }
-      if (data.workspace) setMailWorkspace(data.workspace);
+      if (data.workspace) {
+        setMailWorkspace((current) =>
+          mergeWorkspacePreservingMessageBodies(data.workspace!, current),
+        );
+      }
       if (data.message) {
         setCompose((current) =>
           current
@@ -1054,6 +1162,7 @@ export default function MailClient({
     options: {
       providerFolderId?: string | null;
       loadMore?: boolean;
+      maxResults?: number;
     } = {},
   ) {
     const loadMoreKey = `load-more:${accountId}:${options.providerFolderId ?? "ALL"}`;
@@ -1072,11 +1181,16 @@ export default function MailClient({
           accountId,
           providerFolderId: options.providerFolderId ?? null,
           backfill: options.loadMore === true,
+          maxResults: options.maxResults,
         }),
       });
       const data = (await res.json().catch(() => ({}))) as MailSyncResponse;
       if (!res.ok) throw new Error(data.error || `Sync failed (${res.status})`);
-      if (data.workspace) setMailWorkspace(data.workspace);
+      if (data.workspace) {
+        setMailWorkspace((current) =>
+          mergeWorkspacePreservingMessageBodies(data.workspace!, current),
+        );
+      }
       if (options.loadMore) {
         if ((data.loadedCount ?? 0) > 0) {
           setUiNotice(
@@ -1114,7 +1228,11 @@ export default function MailClient({
       });
       const data = (await res.json().catch(() => ({}))) as MailSearchResponse;
       if (!res.ok) throw new Error(data.error || `Search failed (${res.status})`);
-      if (data.workspace) setMailWorkspace(data.workspace);
+      if (data.workspace) {
+        setMailWorkspace((current) =>
+          mergeWorkspacePreservingMessageBodies(data.workspace!, current),
+        );
+      }
       setUiNotice(
         `Found ${data.loadedCount ?? 0} Gmail result${(data.loadedCount ?? 0) === 1 ? "" : "s"}.`,
       );
@@ -1139,7 +1257,11 @@ export default function MailClient({
         error?: string;
       };
       if (!res.ok) throw new Error(data.error || `Remove failed (${res.status})`);
-      if (data.workspace) setMailWorkspace(data.workspace);
+      if (data.workspace) {
+        setMailWorkspace((current) =>
+          mergeWorkspacePreservingMessageBodies(data.workspace!, current),
+        );
+      }
       setSelectedAccountId(data.workspace?.accounts[0]?.id ?? null);
       setSelectedFolderId(null);
       setSelectedThreadId(null);
@@ -1175,7 +1297,11 @@ export default function MailClient({
       } else {
         setUiNotice(`Deleted ${data.deletedCount ?? 0} messages from Trash.`);
       }
-      if (data.workspace) setMailWorkspace(data.workspace);
+      if (data.workspace) {
+        setMailWorkspace((current) =>
+          mergeWorkspacePreservingMessageBodies(data.workspace!, current),
+        );
+      }
     } catch (err) {
       setUiError(err instanceof Error ? err.message : "Empty Trash failed");
     } finally {
@@ -1230,7 +1356,11 @@ export default function MailClient({
       if (!res.ok) {
         throw new Error(data.error || `Bulk action failed (${res.status})`);
       }
-      if (data.workspace) setMailWorkspace(data.workspace);
+      if (data.workspace) {
+        setMailWorkspace((current) =>
+          mergeWorkspacePreservingMessageBodies(data.workspace!, current),
+        );
+      }
       setSelectedThreadIds(new Set());
       setUiNotice(
         `Updated ${data.affectedCount ?? selectedBulkMessageIds.length} message${
@@ -1265,7 +1395,11 @@ export default function MailClient({
       });
       const data = (await res.json().catch(() => ({}))) as MailMoveResponse;
       if (!res.ok) throw new Error(data.error || `Move failed (${res.status})`);
-      if (data.workspace) setMailWorkspace(data.workspace);
+      if (data.workspace) {
+        setMailWorkspace((current) =>
+          mergeWorkspacePreservingMessageBodies(data.workspace!, current),
+        );
+      }
       if (bulk) setSelectedThreadIds(new Set());
       setUiNotice(
         `Moved ${data.affectedCount ?? messageIds.length} message${
@@ -1543,7 +1677,12 @@ export default function MailClient({
                   type="button"
                   title="Sync"
                   disabled={syncingAccountId === selectedAccount.id}
-                  onClick={() => void syncAccount(selectedAccount.id)}
+                  onClick={() =>
+                    void syncAccount(selectedAccount.id, {
+                      providerFolderId: activeFolder?.providerFolderId ?? null,
+                      maxResults: 20,
+                    })
+                  }
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
                 >
                   <RefreshCw
@@ -1865,7 +2004,7 @@ export default function MailClient({
                 <button
                   type="button"
                   title="Edit draft"
-                  disabled={!!pendingAction}
+                  disabled={!!pendingAction || messageBodyLoading}
                   onClick={openDraft}
                   className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[var(--fg)] hover:bg-[var(--card)] disabled:opacity-50"
                 >
@@ -1877,7 +2016,9 @@ export default function MailClient({
                   <button
                     type="button"
                     title="Reply"
-                    disabled={!!pendingAction || !selectedMessage.fromEmail}
+                    disabled={
+                      !!pendingAction || messageBodyLoading || !selectedMessage.fromEmail
+                    }
                     onClick={openReply}
                     className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
                   >
@@ -1886,7 +2027,7 @@ export default function MailClient({
                   <button
                     type="button"
                     title="Forward"
-                    disabled={!!pendingAction}
+                    disabled={!!pendingAction || messageBodyLoading}
                     onClick={openForward}
                     className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card)] hover:text-[var(--fg)] disabled:opacity-50"
                   >
@@ -2021,7 +2162,14 @@ export default function MailClient({
               </header>
 
               <div className="py-6 text-[15px] leading-7">
-                {renderMailBody(selectedMessage.bodyText || selectedMessage.snippet)}
+                {messageBodyLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-[var(--muted)]">
+                    <Loader2 size={15} className="animate-spin" />
+                    Loading message...
+                  </div>
+                ) : (
+                  renderMailBody(selectedMessage.bodyText || selectedMessage.snippet)
+                )}
               </div>
               {selectedMessage.attachments.length > 0 && (
                 <section className="border-t border-[var(--border)] pt-4">

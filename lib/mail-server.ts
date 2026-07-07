@@ -34,6 +34,30 @@ const GMAIL_SEARCH_PAGE_SIZE = 50;
 const MAIL_WORKSPACE_THREAD_LIMIT = 500;
 const MAIL_WORKSPACE_MESSAGE_LIMIT = 2000;
 const DEFAULT_GMAIL_CURSOR_KEY = "ALL";
+const MAIL_MESSAGE_SUMMARY_SELECT = [
+  "id",
+  "owner_id",
+  "account_id",
+  "thread_id",
+  "folder_id",
+  "provider_message_id",
+  "from_email",
+  "from_name",
+  "to_recipients",
+  "cc_recipients",
+  "bcc_recipients",
+  "subject",
+  "snippet",
+  "sent_at",
+  "received_at",
+  "unread",
+  "starred",
+  "has_attachments",
+  "attachments",
+  "labels",
+  "created_at",
+  "updated_at",
+].join(",");
 
 const MAIL_TABLE_SETUP_ERROR =
   "Mail database is not set up yet. Apply supabase/migrations/034_mail_client.sql.";
@@ -147,8 +171,8 @@ type MailMessageRow = {
   bcc_recipients: unknown;
   subject: string;
   snippet: string;
-  body_text: string;
-  body_html: string;
+  body_text?: string | null;
+  body_html?: string | null;
   sent_at: string | null;
   received_at: string | null;
   unread: boolean;
@@ -454,8 +478,8 @@ function mapMessage(row: MailMessageRow): MailMessage {
     bccRecipients: recipients(row.bcc_recipients),
     subject: row.subject,
     snippet: row.snippet,
-    bodyText: row.body_text,
-    bodyHtml: row.body_html,
+    bodyText: typeof row.body_text === "string" ? row.body_text : "",
+    bodyHtml: typeof row.body_html === "string" ? row.body_html : "",
     sentAt: row.sent_at,
     receivedAt: row.received_at,
     unread: row.unread,
@@ -655,7 +679,7 @@ export async function listMailWorkspace(
         .limit(MAIL_WORKSPACE_THREAD_LIMIT),
       db
         .from("mail_messages")
-        .select("*")
+        .select(MAIL_MESSAGE_SUMMARY_SELECT)
         .eq("owner_id", ownerId)
         .order("received_at", { ascending: false, nullsFirst: false })
         .limit(MAIL_WORKSPACE_MESSAGE_LIMIT),
@@ -680,8 +704,23 @@ export async function listMailWorkspace(
     accounts: (accountsRes.data as MailAccountRow[]).map(mapAccount),
     folders: (foldersRes.data as MailFolderRow[]).map(mapFolder),
     threads: (threadsRes.data as MailThreadRow[]).map(mapThread),
-    messages: (messagesRes.data as MailMessageRow[]).map(mapMessage),
+    messages: (messagesRes.data as unknown as MailMessageRow[]).map(mapMessage),
   };
+}
+
+export async function getMailMessageDetail(input: {
+  ownerId: string;
+  messageId: string;
+}): Promise<MailMessage> {
+  const db = createAdminClient();
+  const { data, error } = await db
+    .from("mail_messages")
+    .select("*")
+    .eq("owner_id", input.ownerId)
+    .eq("id", input.messageId)
+    .single();
+  if (error) throw error;
+  return mapMessage(data as MailMessageRow);
 }
 
 async function getPrivateAccount(
@@ -1393,6 +1432,7 @@ export async function syncGmailAccount(input: {
   accountId: string;
   providerFolderId?: string | null;
   backfill?: boolean;
+  maxResults?: number;
 }): Promise<GmailSyncResult> {
   const account = await getPrivateAccount(input.ownerId, input.accountId);
   if (!account || account.provider !== "gmail") {
@@ -1452,6 +1492,7 @@ export async function syncGmailAccount(input: {
       const listed = await listGmailMessagesPage(accessToken, {
         providerFolderId,
         pageToken,
+        maxResults: input.maxResults,
       });
       const detailed = await fetchGmailMessagesLimited(
         accessToken,
