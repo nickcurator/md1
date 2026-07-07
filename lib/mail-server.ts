@@ -2221,6 +2221,54 @@ async function gmailTrash(accessToken: string, providerMessageId: string) {
   }
 }
 
+async function gmailTrashMessagesLimited(
+  accessToken: string,
+  providerMessageIds: string[],
+): Promise<void> {
+  let nextIndex = 0;
+  const workerCount = Math.min(3, providerMessageIds.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < providerMessageIds.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        await gmailTrash(accessToken, providerMessageIds[index]);
+        await wait(25);
+      }
+    }),
+  );
+}
+
+async function gmailBatchModifyMessages(
+  accessToken: string,
+  providerMessageIds: string[],
+  body: { addLabelIds?: string[]; removeLabelIds?: string[] },
+) {
+  if (providerMessageIds.length === 0) return;
+  for (let index = 0; index < providerMessageIds.length; index += 1000) {
+    const ids = providerMessageIds.slice(index, index + 1000);
+    const res = await fetch(
+      "https://gmail.googleapis.com/gmail/v1/users/me/messages/batchModify",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ ids, ...body }),
+      },
+    );
+    if (!res.ok) {
+      const data = (await res.json().catch(() => null)) as
+        | { error?: { message?: string } }
+        | null;
+      throw new Error(
+        data?.error?.message || `Gmail batch modify failed (${res.status})`,
+      );
+    }
+  }
+}
+
 async function gmailBatchDeleteMessages(
   accessToken: string,
   providerMessageIds: string[],
@@ -2384,6 +2432,53 @@ export type MailMessageActionResult = {
   workspace?: MailWorkspace;
 };
 
+function gmailBatchModifyBodyForAction(
+  action: MailMessageAction,
+): { addLabelIds?: string[]; removeLabelIds?: string[] } | null {
+  if (action === "mark_read") return { removeLabelIds: ["UNREAD"] };
+  if (action === "mark_unread") return { addLabelIds: ["UNREAD"] };
+  if (action === "archive") return { removeLabelIds: ["INBOX"] };
+  if (action === "star") return { addLabelIds: ["STARRED"] };
+  if (action === "unstar") return { removeLabelIds: ["STARRED"] };
+  return null;
+}
+
+async function updateLocalMessagesAfterBulkAction(input: {
+  ownerId: string;
+  accountId: string;
+  messages: MailMessageRow[];
+  action: MailMessageAction;
+}): Promise<void> {
+  const db = createAdminClient();
+  const folderIds = await listMailFolderIds({
+    ownerId: input.ownerId,
+    accountId: input.accountId,
+  });
+  const affectedThreadIds = new Set<string>();
+  const now = new Date().toISOString();
+
+  for (const message of input.messages) {
+    const next = applyMailActionToLabels(stringArray(message.labels), input.action);
+    const { error } = await db
+      .from("mail_messages")
+      .update({
+        folder_id: primaryFolderId(next.labels, folderIds),
+        unread: next.unread,
+        starred: next.starred,
+        labels: next.labels,
+        updated_at: now,
+      })
+      .eq("id", message.id)
+      .eq("owner_id", input.ownerId);
+    if (error) throw error;
+    if (message.thread_id) affectedThreadIds.add(message.thread_id);
+  }
+
+  for (const threadId of affectedThreadIds) {
+    await refreshOrRemoveThread({ ownerId: input.ownerId, threadId });
+  }
+}
+
 async function updateLocalMessageAfterAction(input: {
   ownerId: string;
   accountId: string;
@@ -2508,6 +2603,74 @@ export async function applyMailMessageAction(input: {
     message,
     action: input.action,
   });
+}
+
+export async function applyBulkMailMessageAction(input: {
+  ownerId: string;
+  messageIds: string[];
+  action: MailMessageAction;
+}): Promise<{ workspace: MailWorkspace; affectedCount: number }> {
+  const ids = [...new Set(input.messageIds)].filter(Boolean).slice(0, 500);
+  if (ids.length === 0) throw new Error("No messages selected");
+  if (input.action === "delete_draft") {
+    throw new Error("Discard drafts one at a time.");
+  }
+
+  const db = createAdminClient();
+  const { data: messageData, error: messageError } = await db
+    .from("mail_messages")
+    .select("*")
+    .eq("owner_id", input.ownerId)
+    .in("id", ids);
+  if (messageError) throw messageError;
+  const messages = (messageData as MailMessageRow[]).filter((message) => {
+    const labels = stringArray(message.labels);
+    return !labels.includes("DRAFT");
+  });
+  if (messages.length === 0) throw new Error("No actionable messages selected");
+
+  const messagesByAccount = new Map<string, MailMessageRow[]>();
+  for (const message of messages) {
+    const list = messagesByAccount.get(message.account_id) ?? [];
+    list.push(message);
+    messagesByAccount.set(message.account_id, list);
+  }
+
+  for (const [accountId, accountMessages] of messagesByAccount.entries()) {
+    const account = await getPrivateAccount(input.ownerId, accountId);
+    if (!account || account.provider !== "gmail") {
+      throw new Error("Mail account not found");
+    }
+    const accessToken = await gmailAccessToken(account);
+    const providerMessageIds = accountMessages.map(
+      (message) => message.provider_message_id,
+    );
+
+    if (input.action === "trash") {
+      await gmailTrashMessagesLimited(accessToken, providerMessageIds);
+    } else {
+      const body = gmailBatchModifyBodyForAction(input.action);
+      if (!body) throw new Error("Invalid bulk action");
+      await gmailBatchModifyMessages(accessToken, providerMessageIds, body);
+    }
+
+    await updateLocalMessagesAfterBulkAction({
+      ownerId: input.ownerId,
+      accountId,
+      messages: accountMessages,
+      action: input.action,
+    });
+    await syncGmailFolders({
+      ownerId: input.ownerId,
+      accountId,
+      accessToken,
+    });
+  }
+
+  return {
+    workspace: await listMailWorkspace(input.ownerId),
+    affectedCount: messages.length,
+  };
 }
 
 export async function emptyGmailTrash(input: {

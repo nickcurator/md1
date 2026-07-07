@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   Archive,
   Check,
+  CheckSquare,
   Download,
   FileText,
   Forward,
@@ -18,6 +19,7 @@ import {
   Reply,
   Search,
   Send,
+  Square,
   Star,
   Trash2,
   X,
@@ -361,6 +363,12 @@ type MailActionResponse = {
   error?: string;
 };
 
+type MailBulkActionResponse = {
+  workspace?: MailWorkspace;
+  affectedCount?: number;
+  error?: string;
+};
+
 type MailSyncResponse = {
   workspace?: MailWorkspace;
   loadedCount?: number;
@@ -588,6 +596,9 @@ export default function MailClient({
   );
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [query, setQuery] = useState("");
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
@@ -767,6 +778,22 @@ export default function MailClient({
     }
   }, [selectedThreadId, visibleThreads]);
 
+  useEffect(() => {
+    const visibleIds = new Set(visibleThreads.map((thread) => thread.id));
+    setSelectedThreadIds((current) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of current) {
+        if (visibleIds.has(id)) {
+          next.add(id);
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [visibleThreads]);
+
   const selectedThread =
     visibleThreads.find((thread) => thread.id === selectedThreadId) ??
     visibleThreads[0] ??
@@ -782,6 +809,48 @@ export default function MailClient({
     : [];
   const selectedMessage = selectedMessages[selectedMessages.length - 1] ?? null;
   const selectedIsDraft = isDraftMessage(selectedMessage);
+  const selectedBulkThreads = visibleThreads.filter((thread) =>
+    selectedThreadIds.has(thread.id),
+  );
+  const selectedBulkMessageIds = useMemo(() => {
+    if (!selectedAccount || selectedThreadIds.size === 0) return [];
+    const threadIds = selectedThreadIds;
+    return [
+      ...new Set(
+        mailWorkspace.messages
+          .filter(
+            (message) =>
+              message.accountId === selectedAccount.id &&
+              message.threadId !== null &&
+              threadIds.has(message.threadId) &&
+              !message.labels.includes("DRAFT"),
+          )
+          .map((message) => message.id),
+      ),
+    ];
+  }, [mailWorkspace.messages, selectedAccount, selectedThreadIds]);
+  const allVisibleThreadsSelected =
+    visibleThreads.length > 0 &&
+    visibleThreads.every((thread) => selectedThreadIds.has(thread.id));
+  const bulkBusy = pendingAction?.startsWith("bulk:") ?? false;
+
+  function toggleThreadSelected(threadId: string) {
+    setSelectedThreadIds((current) => {
+      const next = new Set(current);
+      if (next.has(threadId)) next.delete(threadId);
+      else next.add(threadId);
+      return next;
+    });
+  }
+
+  function toggleAllVisibleThreads() {
+    setSelectedThreadIds((current) => {
+      if (allVisibleThreadsSelected) return new Set();
+      const next = new Set(current);
+      for (const thread of visibleThreads) next.add(thread.id);
+      return next;
+    });
+  }
 
   function openCompose(accountId = selectedAccount?.id ?? "") {
     if (!accountId) return;
@@ -1110,6 +1179,39 @@ export default function MailClient({
     } catch (err) {
       setMailWorkspace(previousWorkspace);
       setUiError(err instanceof Error ? err.message : "Action failed");
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  async function runBulkAction(action: MailMessageAction) {
+    if (selectedBulkMessageIds.length === 0) return;
+    const key = `bulk:${action}`;
+    setPendingAction(key);
+    setUiError(null);
+    setUiNotice(null);
+    try {
+      const res = await fetch("/api/mail/messages/bulk-action", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action,
+          messageIds: selectedBulkMessageIds,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as MailBulkActionResponse;
+      if (!res.ok) {
+        throw new Error(data.error || `Bulk action failed (${res.status})`);
+      }
+      if (data.workspace) setMailWorkspace(data.workspace);
+      setSelectedThreadIds(new Set());
+      setUiNotice(
+        `Updated ${data.affectedCount ?? selectedBulkMessageIds.length} message${
+          (data.affectedCount ?? selectedBulkMessageIds.length) === 1 ? "" : "s"
+        }.`,
+      );
+    } catch (err) {
+      setUiError(err instanceof Error ? err.message : "Bulk action failed");
     } finally {
       setPendingAction(null);
     }
@@ -1473,64 +1575,169 @@ export default function MailClient({
             </div>
           ) : (
             <>
+              <div className="mb-2 flex h-9 items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--card)] px-2">
+                <button
+                  type="button"
+                  title={allVisibleThreadsSelected ? "Clear selection" : "Select all visible"}
+                  onClick={toggleAllVisibleThreads}
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--bg)] hover:text-[var(--fg)]"
+                >
+                  {allVisibleThreadsSelected ? (
+                    <CheckSquare size={15} />
+                  ) : (
+                    <Square size={15} />
+                  )}
+                </button>
+                <span className="min-w-0 flex-1 truncate text-xs text-[var(--muted)]">
+                  {selectedBulkThreads.length > 0
+                    ? `${selectedBulkThreads.length} selected`
+                    : "Select"}
+                </span>
+                {selectedBulkThreads.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      title="Mark read"
+                      disabled={bulkBusy || selectedBulkMessageIds.length === 0}
+                      onClick={() => void runBulkAction("mark_read")}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--bg)] hover:text-[var(--fg)] disabled:opacity-50"
+                    >
+                      {pendingAction === "bulk:mark_read" ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Check size={14} />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      title="Mark unread"
+                      disabled={bulkBusy || selectedBulkMessageIds.length === 0}
+                      onClick={() => void runBulkAction("mark_unread")}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--bg)] hover:text-[var(--fg)] disabled:opacity-50"
+                    >
+                      {pendingAction === "bulk:mark_unread" ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Mail size={14} />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      title="Archive"
+                      disabled={bulkBusy || selectedBulkMessageIds.length === 0}
+                      onClick={() => void runBulkAction("archive")}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--bg)] hover:text-[var(--fg)] disabled:opacity-50"
+                    >
+                      {pendingAction === "bulk:archive" ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Archive size={14} />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      title="Star"
+                      disabled={bulkBusy || selectedBulkMessageIds.length === 0}
+                      onClick={() => void runBulkAction("star")}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--bg)] hover:text-[var(--fg)] disabled:opacity-50"
+                    >
+                      {pendingAction === "bulk:star" ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Star size={14} />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      title="Trash"
+                      disabled={bulkBusy || selectedBulkMessageIds.length === 0}
+                      onClick={() => void runBulkAction("trash")}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--bg)] hover:text-red-500 disabled:opacity-50"
+                    >
+                      {pendingAction === "bulk:trash" ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Trash2 size={14} />
+                      )}
+                    </button>
+                  </>
+                )}
+              </div>
               <ul className="space-y-0.5">
                 {visibleThreads.map((thread) => {
                   const selected = selectedThread?.id === thread.id;
+                  const checked = selectedThreadIds.has(thread.id);
                   return (
                     <li key={thread.id}>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedThreadId(thread.id)}
-                        aria-label={`${thread.unread ? "Unread: " : ""}${thread.subject}`}
-                        className={`w-full rounded-lg px-3 py-2 text-left transition-colors ${
+                      <div
+                        className={`flex rounded-lg transition-colors ${
                           selected
                             ? "bg-[var(--card)] ring-1 ring-[var(--border)]"
-                            : thread.unread
-                              ? "bg-[var(--card)]/35 hover:bg-[var(--card)]/80"
-                              : "hover:bg-[var(--card)]/80"
+                            : checked
+                              ? "bg-[var(--card)]/60"
+                              : thread.unread
+                                ? "bg-[var(--card)]/35 hover:bg-[var(--card)]/80"
+                                : "hover:bg-[var(--card)]/80"
                         }`}
                       >
-                        <span className="flex items-start gap-2">
-                          <span
-                            aria-hidden="true"
-                            className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
-                              thread.unread ? "bg-blue-400" : "bg-transparent"
-                            }`}
-                          />
-                          <span className="min-w-0 flex-1">
+                        <button
+                          type="button"
+                          title={checked ? "Unselect" : "Select"}
+                          onClick={() => toggleThreadSelected(thread.id)}
+                          className="flex w-8 shrink-0 items-start justify-center rounded-l-lg pt-3 text-[var(--muted)] hover:text-[var(--fg)]"
+                        >
+                          {checked ? <CheckSquare size={15} /> : <Square size={15} />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedThreadId(thread.id)}
+                          aria-label={`${thread.unread ? "Unread: " : ""}${thread.subject}`}
+                          className="min-w-0 flex-1 rounded-r-lg py-2 pr-3 text-left"
+                        >
+                          <span className="flex items-start gap-2">
                             <span
-                              className={`block truncate text-sm ${
-                                thread.unread ? "font-semibold" : "font-medium"
+                              aria-hidden="true"
+                              className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                                thread.unread ? "bg-blue-400" : "bg-transparent"
                               }`}
-                            >
-                              {threadSender(thread)}
-                            </span>
-                            <span
-                              className={`mt-0.5 block truncate text-sm ${
-                                thread.unread
-                                  ? "font-semibold text-[var(--fg)]"
-                                  : "text-[var(--fg)]"
-                              }`}
-                            >
-                              {thread.subject}
-                            </span>
-                          </span>
-                          <span className="shrink-0 text-[11px] text-[var(--muted)]">
-                            {formatDate(thread.lastMessageAt)}
-                          </span>
-                        </span>
-                        <span className="mt-1 flex items-center gap-1.5">
-                          {thread.starred && (
-                            <Star
-                              size={12}
-                              className="shrink-0 fill-yellow-400 text-yellow-500"
                             />
-                          )}
-                          <span className="line-clamp-2 text-xs leading-relaxed text-[var(--muted)]">
-                            {cleanMailText(thread.snippet)}
+                            <span className="min-w-0 flex-1">
+                              <span
+                                className={`block truncate text-sm ${
+                                  thread.unread ? "font-semibold" : "font-medium"
+                                }`}
+                              >
+                                {threadSender(thread)}
+                              </span>
+                              <span
+                                className={`mt-0.5 block truncate text-sm ${
+                                  thread.unread
+                                    ? "font-semibold text-[var(--fg)]"
+                                    : "text-[var(--fg)]"
+                                }`}
+                              >
+                                {thread.subject}
+                              </span>
+                            </span>
+                            <span
+                              className="shrink-0 text-[11px] text-[var(--muted)]"
+                            >
+                              {formatDate(thread.lastMessageAt)}
+                            </span>
                           </span>
-                        </span>
-                      </button>
+                          <span className="mt-1 flex items-center gap-1.5">
+                            {thread.starred && (
+                              <Star
+                                size={12}
+                                className="shrink-0 fill-yellow-400 text-yellow-500"
+                              />
+                            )}
+                            <span className="line-clamp-2 text-xs leading-relaxed text-[var(--muted)]">
+                              {cleanMailText(thread.snippet)}
+                            </span>
+                          </span>
+                        </button>
+                      </div>
                     </li>
                   );
                 })}
