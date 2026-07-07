@@ -416,6 +416,8 @@ type GmailMessage = {
   payload?: GmailMessagePart;
 };
 
+type GmailMessageFetchFormat = "full" | "metadata";
+
 type ParsedGmailMessage = {
   providerMessageId: string;
   providerThreadId: string;
@@ -435,6 +437,7 @@ type ParsedGmailMessage = {
   hasAttachments: boolean;
   attachments: MailAttachment[];
   labels: string[];
+  bodyLoaded: boolean;
 };
 
 type GmailSendResponse = {
@@ -887,14 +890,47 @@ export async function getMailMessageDetail(input: {
   messageId: string;
 }): Promise<MailMessage> {
   const db = createAdminClient();
-  const { data, error } = await db
-    .from("mail_messages")
-    .select("*")
-    .eq("owner_id", input.ownerId)
-    .eq("id", input.messageId)
-    .single();
-  if (error) throw error;
-  return mapMessage(data as MailMessageRow);
+  const loadLocalMessage = async () => {
+    const { data, error } = await db
+      .from("mail_messages")
+      .select("*")
+      .eq("owner_id", input.ownerId)
+      .eq("id", input.messageId)
+      .single();
+    if (error) throw error;
+    return mapMessage(data as MailMessageRow);
+  };
+
+  const message = await loadLocalMessage();
+  if (message.bodyText || message.bodyHtml) return message;
+
+  const account = await getPrivateAccount(input.ownerId, message.accountId);
+  if (!account || account.provider !== "gmail") return message;
+
+  const accessToken = await gmailAccessToken(account);
+  let folderIdByProviderId = await listMailFolderIds({
+    ownerId: input.ownerId,
+    accountId: account.id,
+  });
+  if (folderIdByProviderId.size === 0) {
+    folderIdByProviderId = await syncGmailFolders({
+      ownerId: input.ownerId,
+      accountId: account.id,
+      accessToken,
+    });
+  }
+  const detailed = await fetchGmailMessageWithRetry(
+    accessToken,
+    message.providerMessageId,
+    "full",
+  );
+  await upsertParsedGmailMessages({
+    ownerId: input.ownerId,
+    accountId: account.id,
+    messages: [parseGmailMessage(detailed, folderIdByProviderId)],
+  });
+
+  return loadLocalMessage();
 }
 
 async function getPrivateAccount(
@@ -1371,9 +1407,11 @@ function parseGmailAttachments(parts: GmailMessagePart[]): MailAttachment[] {
 function parseGmailMessage(
   message: GmailMessage,
   folderIdByProviderId: Map<string, string>,
+  options: { bodyLoaded?: boolean } = {},
 ): ParsedGmailMessage {
+  const bodyLoaded = options.bodyLoaded !== false;
   const labels = message.labelIds ?? [];
-  const parts = walkParts(message.payload);
+  const parts = bodyLoaded ? walkParts(message.payload) : [];
   const headers = message.payload?.headers ?? [];
   const subject = header(headers, "Subject") || "(no subject)";
   const from = parseAddressList(header(headers, "From"))[0] ?? {
@@ -1405,7 +1443,7 @@ function parseGmailMessage(
   const htmlPart = parts.find((p) => p.mimeType === "text/html");
   const bodyText = cleanMailText(decodeGmailData(textPart?.body?.data));
   const bodyHtml = decodeGmailData(htmlPart?.body?.data).trim();
-  const attachments = parseGmailAttachments(parts);
+  const attachments = bodyLoaded ? parseGmailAttachments(parts) : [];
 
   return {
     providerMessageId: message.id,
@@ -1426,16 +1464,23 @@ function parseGmailMessage(
     hasAttachments: attachments.length > 0,
     attachments,
     labels,
+    bodyLoaded,
   };
 }
 
 async function fetchGmailMessage(
   accessToken: string,
   id: string,
+  format: GmailMessageFetchFormat = "full",
 ): Promise<GmailMessage> {
   const params = new URLSearchParams({
-    format: "full",
+    format,
   });
+  if (format === "metadata") {
+    for (const name of ["Subject", "From", "To", "Cc", "Bcc", "Date"]) {
+      params.append("metadataHeaders", name);
+    }
+  }
   return googleJson<GmailMessage>(
     accessToken,
     `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(
@@ -1460,10 +1505,11 @@ function isGmailConcurrencyError(err: unknown): boolean {
 async function fetchGmailMessageWithRetry(
   accessToken: string,
   id: string,
+  format: GmailMessageFetchFormat = "full",
 ): Promise<GmailMessage> {
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
-      return await fetchGmailMessage(accessToken, id);
+      return await fetchGmailMessage(accessToken, id, format);
     } catch (err) {
       if (!isGmailConcurrencyError(err) || attempt === 3) throw err;
       await wait(1200 * (attempt + 1));
@@ -1475,6 +1521,7 @@ async function fetchGmailMessageWithRetry(
 async function fetchGmailMessagesLimited(
   accessToken: string,
   messages: { id: string }[],
+  format: GmailMessageFetchFormat = "full",
 ): Promise<GmailMessage[]> {
   const results: GmailMessage[] = [];
   let nextIndex = 0;
@@ -1487,6 +1534,7 @@ async function fetchGmailMessagesLimited(
         results[index] = await fetchGmailMessageWithRetry(
           accessToken,
           messages[index].id,
+          format,
         );
         await wait(15);
       }
@@ -1560,31 +1608,36 @@ async function upsertParsedGmailMessages(input: {
     if (threadError) throw threadError;
     affectedThreadIds.add((threadRow as { id: string }).id);
 
+    const messagePayload = {
+      owner_id: input.ownerId,
+      account_id: input.accountId,
+      thread_id: (threadRow as { id: string }).id,
+      folder_id: message.folderId,
+      provider_message_id: message.providerMessageId,
+      from_email: message.from.email,
+      from_name: message.from.name,
+      to_recipients: message.to,
+      cc_recipients: message.cc,
+      bcc_recipients: message.bcc,
+      subject: message.subject,
+      snippet: message.snippet,
+      sent_at: message.sentAt,
+      received_at: message.receivedAt,
+      unread: message.unread,
+      starred: message.starred,
+      labels: message.labels,
+      updated_at: new Date().toISOString(),
+      ...(message.bodyLoaded
+        ? {
+            body_text: message.bodyText,
+            body_html: message.bodyHtml,
+            has_attachments: message.hasAttachments,
+            attachments: message.attachments,
+          }
+        : {}),
+    };
     const { error: messageError } = await db.from("mail_messages").upsert(
-      {
-        owner_id: input.ownerId,
-        account_id: input.accountId,
-        thread_id: (threadRow as { id: string }).id,
-        folder_id: message.folderId,
-        provider_message_id: message.providerMessageId,
-        from_email: message.from.email,
-        from_name: message.from.name,
-        to_recipients: message.to,
-        cc_recipients: message.cc,
-        bcc_recipients: message.bcc,
-        subject: message.subject,
-        snippet: message.snippet,
-        body_text: message.bodyText,
-        body_html: message.bodyHtml,
-        sent_at: message.sentAt,
-        received_at: message.receivedAt,
-        unread: message.unread,
-        starred: message.starred,
-        has_attachments: message.hasAttachments,
-        attachments: message.attachments,
-        labels: message.labels,
-        updated_at: new Date().toISOString(),
-      },
+      messagePayload,
       { onConflict: "account_id,provider_message_id" },
     );
     if (messageError) throw messageError;
@@ -1694,12 +1747,15 @@ async function syncGmailHistory(input: {
   const detailed = await fetchGmailMessagesLimited(
     input.accessToken,
     history.changedIds.map((id) => ({ id })),
+    "metadata",
   );
   await upsertParsedGmailMessages({
     ownerId: input.ownerId,
     accountId: input.accountId,
     messages: detailed.map((message) =>
-      parseGmailMessage(message, input.folderIdByProviderId),
+      parseGmailMessage(message, input.folderIdByProviderId, {
+        bodyLoaded: false,
+      }),
     ),
   });
   return {
@@ -1791,9 +1847,12 @@ export async function syncGmailAccount(input: {
       const detailed = await fetchGmailMessagesLimited(
         accessToken,
         listed.messages ?? [],
+        "metadata",
       );
       const parsed = detailed.map((message) =>
-        parseGmailMessage(message, folderIdByProviderId),
+        parseGmailMessage(message, folderIdByProviderId, {
+          bodyLoaded: false,
+        }),
       );
       parsedCount = parsed.length;
       hasMore = Boolean(listed.nextPageToken);
@@ -1887,12 +1946,15 @@ export async function searchGmailMessages(input: {
     const detailed = await fetchGmailMessagesLimited(
       accessToken,
       listed.messages ?? [],
+      "metadata",
     );
     await upsertParsedGmailMessages({
       ownerId: input.ownerId,
       accountId: account.id,
       messages: detailed.map((message) =>
-        parseGmailMessage(message, folderIdByProviderId),
+        parseGmailMessage(message, folderIdByProviderId, {
+          bodyLoaded: false,
+        }),
       ),
     });
     const profile = await fetchGmailProfile(accessToken);
